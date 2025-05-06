@@ -22,7 +22,8 @@ setup(
         'console_scripts': [
         'Manipulation = manipulation.Manipulation:main',
         'record = manipulation.record:main',
-        'gen3lite_pymoveit2 = manipulation.gen3lite_pymoveit2:main'
+        'gen3lite_pymoveit2 = manipulation.gen3lite_pymoveit2:main',
+        'safe = manipulation.safe:main'
         ],
     },
 )
