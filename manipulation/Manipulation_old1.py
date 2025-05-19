@@ -6,7 +6,6 @@ import numpy as np
 import signal
 import sys
 import datetime
-import json
 
 from rclpy.node import Node
 from geometry_msgs.msg import Pose
@@ -29,10 +28,6 @@ PUT_Z_Y = 0.3
 PUT_Z_HEIGHT = 0.214   # Z height for put operations
 SAFE_Z_HEIGHT = 0.3    # Safe Z height for movement between operations
 
-# Y coordinate threshold for require_help message
-# 可以在程序开始时设置这个阈值
-Y_THRESHOLD_FOR_HELP = 0.35  # 默认阈值，如果Y > 0.35，则发送require_help
-
 # Robot status constants
 class RobotStatus:
     WAITING_FOR_TASK = "waiting_for_task"
@@ -47,7 +42,6 @@ class RobotStatus:
     OBJECT_DROPPED = "object_dropped"
     EMERGENCY_STOP = "emergency_stop"
     TASK_COMPLETED = "task_completed"
-    REQUIRE_HELP = "require_help"  # 新增状态
 
 class Gen3LiteArm:
     def __init__(self):
@@ -65,9 +59,6 @@ class Gen3LiteArm:
         self.current_status = RobotStatus.WAITING_FOR_TASK
         self.status_lock = Lock()
         self.status_publisher = self.node.create_publisher(String, '/robot_status', 10)
-        
-        # 新增：require_help消息发布器
-        self.require_help_publisher = self.node.create_publisher(String, '/require_help', 10)
         
         # Subscribe to emergency stop topic
         print("\033[1;36mSubscribing to emergency stop topic: /emergency_stop\033[0m")
@@ -130,28 +121,6 @@ class Gen3LiteArm:
             status_msg = String()
             status_msg.data = self.current_status
             self.status_publisher.publish(status_msg)
-
-    def publish_require_help(self, x, y):
-        """发布require_help消息，包含需要帮助的坐标点"""
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        # 创建包含坐标信息的JSON消息
-        help_data = {
-            "timestamp": timestamp,
-            "coordinates": {
-                "x": float(x),
-                "y": float(y)
-            },
-            "reason": f"Y coordinate {y:.4f} exceeds threshold {Y_THRESHOLD_FOR_HELP:.4f}"
-        }
-        
-        help_msg = String()
-        help_msg.data = json.dumps(help_data)
-        
-        self.require_help_publisher.publish(help_msg)
-        
-        print(f"\033[1;33m[{timestamp}] Published require_help message for coordinates X={x:.4f}, Y={y:.4f}\033[0m")
-        print(f"\033[1;33m[{timestamp}] Help message content: {help_msg.data}\033[0m")
 
     def emergency_callback(self, msg):
         """Handle emergency stop messages"""
@@ -397,21 +366,6 @@ def execute_pick_and_place(arm, gripper, task_coordinates):
         x_float = float(x)
         y_float = float(y)
         
-        # 检查Y坐标是否超过阈值
-        if y_float > Y_THRESHOLD_FOR_HELP:
-            print(f"\033[1;33m[{timestamp}] Y coordinate {y_float:.4f} exceeds threshold {Y_THRESHOLD_FOR_HELP:.4f}\033[0m")
-            print(f"\033[1;33m[{timestamp}] Publishing require_help message...\033[0m")
-            
-            # 发布require_help消息
-            arm.publish_require_help(x_float, y_float)
-            
-            # 设置状态为require_help
-            arm.set_status(RobotStatus.REQUIRE_HELP)
-            
-            # 可以选择跳过这个任务或者等待人工干预
-            print(f"\033[1;33m[{timestamp}] Task {task_num} requires help - skipping to next task\033[0m")
-            continue
-        
         # Create poses for the task
         approach_pose = Pose()
         approach_pose.position.x = x_float
@@ -525,20 +479,6 @@ def get_task_input():
     """Get task input from user"""
     print("\033[1;36mEnter task information for pick and place operations\033[0m")
     
-    # 首先获取Y阈值设置
-    global Y_THRESHOLD_FOR_HELP
-    while True:
-        try:
-            threshold_input = input(f"\033[1;36mEnter Y threshold for require_help (default: {Y_THRESHOLD_FOR_HELP}): \033[0m")
-            if threshold_input.strip() == "":
-                # 如果用户直接按回车，使用默认值
-                break
-            Y_THRESHOLD_FOR_HELP = float(threshold_input)
-            print(f"\033[1;32mY threshold set to: {Y_THRESHOLD_FOR_HELP}\033[0m")
-            break
-        except ValueError:
-            print("\033[1;31mInvalid input. Please enter a valid number.\033[0m")
-    
     # Get number of tasks
     while True:
         try:
@@ -560,15 +500,6 @@ def get_task_input():
                 print(f"\033[1;36m--- Task {i+1} ---\033[0m")
                 x = float(input(f"\033[1;36mEnter X coordinate for task {i+1}: \033[0m"))
                 y = float(input(f"\033[1;36mEnter Y coordinate for task {i+1}: \033[0m"))
-                
-                # 检查并提示用户Y坐标是否超过阈值
-                if y > Y_THRESHOLD_FOR_HELP:
-                    print(f"\033[1;33mWarning: Y coordinate {y:.4f} exceeds threshold {Y_THRESHOLD_FOR_HELP:.4f}")
-                    print(f"This task will trigger a require_help message.\033[0m")
-                    confirm = input(f"\033[1;36mContinue with this coordinate? (y/n): \033[0m")
-                    if confirm.lower() != 'y':
-                        continue
-                
                 task_coordinates.append((x, y))
                 break
             except ValueError:
@@ -577,21 +508,15 @@ def get_task_input():
     # Display the entered tasks
     print("\033[1;36m\nTask Summary:\033[0m")
     print("\033[1;36m------------------------------------\033[0m")
-    print(f"\033[1;36mY Threshold for Help: {Y_THRESHOLD_FOR_HELP:.4f}\033[0m")
+    print("\033[1;36m| Task |   X    |   Y    |   Z1   |   Z2   |\033[0m")
     print("\033[1;36m------------------------------------\033[0m")
-    print("\033[1;36m| Task |   X    |   Y    |   Z1   |   Z2   | Status |\033[0m")
-    print("\033[1;36m-------------------------------------------------\033[0m")
     
     for i, (x, y) in enumerate(task_coordinates):
-        status = "Normal"
-        if y > Y_THRESHOLD_FOR_HELP:
-            status = "⚠️ Requires Help"
-        print(f"\033[1;36m|  {i+1:2d}  | {x:.4f} | {y:.4f} | {PICK_Z_HEIGHT:.4f} | {PUT_Z_HEIGHT:.4f} | {status:>13s} |\033[0m")
+        print(f"\033[1;36m|  {i+1:2d}  | {x:.4f} | {y:.4f} | {PICK_Z_HEIGHT:.4f} | {PUT_Z_HEIGHT:.4f} |\033[0m")
     
-    print("\033[1;36m-------------------------------------------------\033[0m")
+    print("\033[1;36m------------------------------------\033[0m")
     print(f"\033[1;36mZ1 = {PICK_Z_HEIGHT} (Pick height)\033[0m")
     print(f"\033[1;36mZ2 = {PUT_Z_HEIGHT} (Put height)\033[0m")
-    print(f"\033[1;36mY Threshold = {Y_THRESHOLD_FOR_HELP} (Require help if Y > threshold)\033[0m")
     
     return task_coordinates
 
@@ -614,7 +539,6 @@ def main(args=None):
     with open(log_file_path, "a") as log_file:
         log_file.write(f"\n\n{'='*50}\n")
         log_file.write(f"Execution start time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        log_file.write(f"Y threshold for help: {Y_THRESHOLD_FOR_HELP}\n")
         log_file.write(f"{'='*50}\n")
     
     # Get task input from user
@@ -741,9 +665,8 @@ def main(args=None):
 
 if __name__ == '__main__':
     print(f"\033[1;32m{'='*50}\033[0m")
-    print(f"\033[1;32m  Gen3Lite Robotic Arm Control (with Emergency Stop & Help Request)\033[0m")
+    print(f"\033[1;32m  Gen3Lite Robotic Arm Control (with Emergency Stop)\033[0m")
     print(f"\033[1;32m  Status Publishing at 10Hz enabled\033[0m")
-    print(f"\033[1;32m  Require Help Feature enabled\033[0m")
     print(f"\033[1;32m  Execution time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\033[0m")
     print(f"\033[1;32m{'='*50}\033[0m")
     

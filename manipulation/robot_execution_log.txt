@@ -1,0 +1,152 @@
+
+
+==================================================
+Execution start time: 2025-05-09 16:57:58
+==================================================
+Task execution cycle 1 started at 2025-05-09 16:58:06
+Starting pick and place sequence with 1 tasks at 2025-05-09 16:58:06
+Pick and place sequence failed at 2025-05-09 16:58:06
+Status check: Emergency active=False, Emergency operation in progress=False, Ready for restart=False
+Task failed but not in emergency state 2025-05-09 16:58:06
+
+
+==================================================
+Execution start time: 2025-05-12 14:47:38
+==================================================
+Task execution cycle 1 started at 2025-05-12 14:47:50
+Starting pick and place sequence with 1 tasks at 2025-05-12 14:47:50
+Pick and place sequence successful at 2025-05-12 14:47:50
+Status check: Emergency active=False, Emergency operation in progress=False, Ready for restart=False
+Task completed successfully 2025-05-12 14:47:50
+Resource cleanup complete 2025-05-12 14:48:09
+Task cycle ended, no restart needed 2025-05-12 14:48:09
+
+==================================================
+Execution end time: 2025-05-12 14:48:38
+==================================================
+
+
+==================================================
+Execution start time: 2025-05-12 14:48:40
+==================================================
+Task execution cycle 1 started at 2025-05-12 14:48:48
+Starting pick and place sequence with 1 tasks at 2025-05-12 14:48:48
+Pick and place sequence failed at 2025-05-12 14:48:48
+Status check: Emergency active=False, Emergency operation in progress=False, Ready for restart=False
+Task failed but not in emergency state 2025-05-12 14:48:48
+
+
+==================================================
+Execution start time: 2025-05-12 14:52:19
+==================================================
+Task execution cycle 1 started at 2025-05-12 14:52:26
+Starting pick and place sequence with 1 tasks at 2025-05-12 14:52:26
+Pick and place sequence failed at 2025-05-12 14:52:26
+Status check: Emergency active=False, Emergency operation in progress=False, Ready for restart=False
+Task failed but not in emergency state 2025-05-12 14:52:26
+
+
+==================================================
+Execution start time: 2025-05-12 14:53:13
+==================================================
+Task execution cycle 1 started at 2025-05-12 14:53:26
+Starting pick and place sequence with 1 tasks at 2025-05-12 14:53:26
+Pick and place sequence failed at 2025-05-12 14:53:26
+Status check: Emergency active=False, Emergency operation in progress=False, Ready for restart=False
+Task failed but not in emergency state 2025-05-12 14:53:26
+
+
+==================================================
+Execution start time: 2025-05-12 14:54:13
+==================================================
+Task execution cycle 1 started at 2025-05-12 14:54:24
+Starting pick and place sequence with 1 tasks at 2025-05-12 14:54:24
+Pick and place sequence failed at 2025-05-12 14:54:24
+Status check: Emergency active=False, Emergency operation in progress=False, Ready for restart=False
+Task failed but not in emergency state 2025-05-12 14:54:24
+
+
+==================================================
+Execution start time: 2025-05-12 14:55:53
+==================================================
+Task execution cycle 1 started at 2025-05-12 14:55:55
+Starting pick and place sequence with 1 tasks at 2025-05-12 14:55:55
+Pick and place sequence failed at 2025-05-12 14:55:55
+Status check: Emergency active=False, Emergency operation in progress=False, Ready for restart=False
+Task failed but not in emergency state 2025-05-12 14:55:55
+
+
+==================================================
+Execution start time: 2025-05-12 14:56:29
+==================================================
+Task execution cycle 1 started at 2025-05-12 14:56:42
+Starting pick and place sequence with 1 tasks at 2025-05-12 14:56:42
+Pick and place sequence failed at 2025-05-12 14:56:42
+Status check: Emergency active=False, Emergency operation in progress=False, Ready for restart=False
+Task failed but not in emergency state 2025-05-12 14:56:42
+
+
+==================================================
+Execution start time: 2025-05-12 14:57:09
+==================================================
+Task execution cycle 1 started at 2025-05-12 14:57:14
+Starting pick and place sequence with 1 tasks at 2025-05-12 14:57:14
+Pick and place sequence failed at 2025-05-12 14:57:14
+Status check: Emergency active=False, Emergency operation in progress=False, Ready for restart=False
+Task failed but not in emergency state 2025-05-12 14:57:14
+
+
+==================================================
+Execution start time: 2025-05-12 14:57:46
+==================================================
+Task execution cycle 1 started at 2025-05-12 14:57:49
+Starting pick and place sequence with 1 tasks at 2025-05-12 14:57:49
+Main function error: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:241 2025-05-12 14:57:57
+
+
+==================================================
+Execution start time: 2025-05-12 14:58:32
+==================================================
+Task execution cycle 1 started at 2025-05-12 14:58:39
+Starting pick and place sequence with 1 tasks at 2025-05-12 14:58:39
+Pick and place sequence failed at 2025-05-12 14:58:39
+Status check: Emergency active=False, Emergency operation in progress=False, Ready for restart=False
+Task failed but not in emergency state 2025-05-12 14:58:39
+
+
+==================================================
+Execution start time: 2025-05-15 11:42:27
+==================================================
+Task execution cycle 1 started at 2025-05-15 11:42:34
+Starting pick and place sequence with 1 tasks at 2025-05-15 11:42:34
+Pick and place sequence successful at 2025-05-15 11:42:34
+Status check: Emergency active=False, Emergency operation in progress=False, Ready for restart=False
+Task completed successfully 2025-05-15 11:42:34
+
+
+==================================================
+Execution start time: 2025-05-15 14:58:39
+Y threshold for help: 0.35
+==================================================
+Task execution cycle 1 started at 2025-05-15 14:59:11
+Starting pick and place sequence with 1 tasks at 2025-05-15 14:59:11
+Pick and place sequence successful at 2025-05-15 14:59:11
+Status check: Emergency active=False, Emergency operation in progress=False, Ready for restart=False
+Task completed successfully 2025-05-15 14:59:11
+Resource cleanup complete 2025-05-15 14:59:29
+Task cycle ended, no restart needed 2025-05-15 14:59:29
+
+==================================================
+Execution end time: 2025-05-15 15:00:34
+==================================================
+
+
+==================================================
+Execution start time: 2025-05-19 15:55:47
+Y threshold for help: 0.35
+==================================================
+Task execution cycle 1 started at 2025-05-19 15:56:00
+Starting pick and place sequence with 1 tasks at 2025-05-19 15:56:00
+Pick and place sequence successful at 2025-05-19 15:56:00
+Status check: Emergency active=False, Emergency operation in progress=False, Ready for restart=False
+Task completed successfully 2025-05-19 15:56:00

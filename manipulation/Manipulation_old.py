@@ -6,15 +6,14 @@ import numpy as np
 import signal
 import sys
 import datetime
-import json
 
 from rclpy.node import Node
 from geometry_msgs.msg import Pose
 from pyquaternion import Quaternion as PyQuaternion
-from threading import Thread, Lock
+from threading import Thread
 from rclpy.callback_groups import ReentrantCallbackGroup
 from pymoveit2 import MoveIt2, MoveIt2State
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool
 from .gen3lite_pymoveit2 import Gen3LiteGripper
 
 
@@ -29,26 +28,6 @@ PUT_Z_Y = 0.3
 PUT_Z_HEIGHT = 0.214   # Z height for put operations
 SAFE_Z_HEIGHT = 0.3    # Safe Z height for movement between operations
 
-# Y coordinate threshold for require_help message
-# 可以在程序开始时设置这个阈值
-Y_THRESHOLD_FOR_HELP = 0.35  # 默认阈值，如果Y > 0.35，则发送require_help
-
-# Robot status constants
-class RobotStatus:
-    WAITING_FOR_TASK = "waiting_for_task"
-    MOVING_TO_TARGET = "moving_to_target"
-    GRASPING = "grasping"
-    MOVING_TO_RELEASE = "moving_to_release"
-    RELEASING = "releasing"
-    MOVE_TO_TARGET_FAILED = "move_to_target_failed"
-    MOVE_TO_RELEASE_FAILED = "move_to_release_failed"
-    GRASPING_FAILED = "grasping_failed"
-    RELEASING_FAILED = "releasing_failed"
-    OBJECT_DROPPED = "object_dropped"
-    EMERGENCY_STOP = "emergency_stop"
-    TASK_COMPLETED = "task_completed"
-    REQUIRE_HELP = "require_help"  # 新增状态
-
 class Gen3LiteArm:
     def __init__(self):
         print("\033[1;36mInitializing Gen3LiteArm...\033[0m")
@@ -60,14 +39,6 @@ class Gen3LiteArm:
         self.current_pose = Pose()
         self.restart_ready = False  # Flag for restart readiness
         self.emergency_operation_in_progress = False  # Flag for emergency operation in progress
-        
-        # Status tracking and publishing
-        self.current_status = RobotStatus.WAITING_FOR_TASK
-        self.status_lock = Lock()
-        self.status_publisher = self.node.create_publisher(String, '/robot_status', 10)
-        
-        # 新增：require_help消息发布器
-        self.require_help_publisher = self.node.create_publisher(String, '/require_help', 10)
         
         # Subscribe to emergency stop topic
         print("\033[1;36mSubscribing to emergency stop topic: /emergency_stop\033[0m")
@@ -107,51 +78,11 @@ class Gen3LiteArm:
         self.moveit2.max_acceleration = 0.1
         self.moveit2.cartesian_jump_threshold = 0.0
         
-        # Start status publishing thread
-        self.status_timer = self.node.create_timer(0.1, self.publish_status)  # 10Hz
-        
         print("\033[1;32mGen3LiteArm initialization complete. Emergency stop handler activated.\033[0m")
         
         # Record start time
         self.start_time = datetime.datetime.now()
         print(f"\033[1;36mSystem start time: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}\033[0m")
-
-    def set_status(self, status):
-        """Thread-safe status setting"""
-        with self.status_lock:
-            if self.current_status != status:
-                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                print(f"\033[1;35m[{timestamp}] Status changed: {self.current_status} -> {status}\033[0m")
-                self.current_status = status
-
-    def publish_status(self):
-        """Publish current robot status at 10Hz"""
-        with self.status_lock:
-            status_msg = String()
-            status_msg.data = self.current_status
-            self.status_publisher.publish(status_msg)
-
-    def publish_require_help(self, x, y):
-        """发布require_help消息，包含需要帮助的坐标点"""
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        # 创建包含坐标信息的JSON消息
-        help_data = {
-            "timestamp": timestamp,
-            "coordinates": {
-                "x": float(x),
-                "y": float(y)
-            },
-            "reason": f"Y coordinate {y:.4f} exceeds threshold {Y_THRESHOLD_FOR_HELP:.4f}"
-        }
-        
-        help_msg = String()
-        help_msg.data = json.dumps(help_data)
-        
-        self.require_help_publisher.publish(help_msg)
-        
-        print(f"\033[1;33m[{timestamp}] Published require_help message for coordinates X={x:.4f}, Y={y:.4f}\033[0m")
-        print(f"\033[1;33m[{timestamp}] Help message content: {help_msg.data}\033[0m")
 
     def emergency_callback(self, msg):
         """Handle emergency stop messages"""
@@ -161,9 +92,6 @@ class Gen3LiteArm:
         if msg.data and not self.emergency_operation_in_progress:
             print(f"\033[1;31m[{timestamp}] !!! Emergency stop signal received !!!\033[0m")
             self.node.get_logger().error("Emergency stop signal received! Stopping current task and moving to Z position of 0.3")
-            
-            # Set emergency status
-            self.set_status(RobotStatus.EMERGENCY_STOP)
             
             # Mark emergency operation in progress to prevent duplicate handling
             self.emergency_operation_in_progress = True
@@ -205,9 +133,6 @@ class Gen3LiteArm:
             
             # Mark system ready for restart
             self.restart_ready = True
-            
-            # Return to waiting status
-            self.set_status(RobotStatus.WAITING_FOR_TASK)
 
     def emergency_raise_z(self):
         """In case of emergency, move the robot arm to Z position 0.3"""
@@ -279,16 +204,12 @@ class Gen3LiteArm:
             self.moveit2.max_velocity = original_velocity
             self.moveit2.max_acceleration = original_acceleration
 
-    def inverse_kinematic_movement(self, target_pose, cartesian=False, status_during_move=None):
+    def inverse_kinematic_movement(self, target_pose, cartesian=False):
         """Execute inverse kinematic movement to target pose"""
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         # Store current pose for emergency handling
         self.current_pose = target_pose
-        
-        # Set status during movement if provided
-        if status_during_move:
-            self.set_status(status_during_move)
         
         # Modified: No longer checking emergency state, as emergency state will be handled immediately in the emergency callback
         # and will automatically reset, allowing the system to continue running
@@ -397,21 +318,6 @@ def execute_pick_and_place(arm, gripper, task_coordinates):
         x_float = float(x)
         y_float = float(y)
         
-        # 检查Y坐标是否超过阈值
-        if y_float > Y_THRESHOLD_FOR_HELP:
-            print(f"\033[1;33m[{timestamp}] Y coordinate {y_float:.4f} exceeds threshold {Y_THRESHOLD_FOR_HELP:.4f}\033[0m")
-            print(f"\033[1;33m[{timestamp}] Publishing require_help message...\033[0m")
-            
-            # 发布require_help消息
-            arm.publish_require_help(x_float, y_float)
-            
-            # 设置状态为require_help
-            arm.set_status(RobotStatus.REQUIRE_HELP)
-            
-            # 可以选择跳过这个任务或者等待人工干预
-            print(f"\033[1;33m[{timestamp}] Task {task_num} requires help - skipping to next task\033[0m")
-            continue
-        
         # Create poses for the task
         approach_pose = Pose()
         approach_pose.position.x = x_float
@@ -444,70 +350,41 @@ def execute_pick_and_place(arm, gripper, task_coordinates):
         print(f"\033[1;36m[{timestamp}] Moving to pick position for Task {task_num}: X={x_float:.4f}, Y={y_float:.4f}, Z={PICK_Z_HEIGHT:.4f}\033[0m")
         
         # Move to position above pick position first
-        if not arm.inverse_kinematic_movement(approach_pose, cartesian=True, status_during_move=RobotStatus.MOVING_TO_TARGET):
+        if not arm.inverse_kinematic_movement(approach_pose, cartesian=True):
             print(f"\033[1;31m[{timestamp}] Failed to move to approach position for Task {task_num}\033[0m")
-            arm.set_status(RobotStatus.MOVE_TO_TARGET_FAILED)
             return False
         
         # Move to pick position
-        if not arm.inverse_kinematic_movement(pick_pose, cartesian=True, status_during_move=RobotStatus.MOVING_TO_TARGET):
+        if not arm.inverse_kinematic_movement(pick_pose, cartesian=True):
             print(f"\033[1;31m[{timestamp}] Failed to move to pick position for Task {task_num}\033[0m")
-            arm.set_status(RobotStatus.MOVE_TO_TARGET_FAILED)
             return False
         
         # Close gripper to grasp object
         print(f"\033[1;36m[{timestamp}] Closing gripper to grasp object for Task {task_num}\033[0m")
-        arm.set_status(RobotStatus.GRASPING)
         gripper_start = datetime.datetime.now()
-        
-        try:
-            gripper.move_to_position(0.7)
-            print(f"\033[1;32m[{timestamp}] Gripper close command sent, duration: {(datetime.datetime.now() - gripper_start).total_seconds():.2f} seconds\033[0m")
-            time.sleep(0.5)
-            
-            # Check if grasping was successful (you may need to implement actual force/position feedback)
-            # For now, we assume it was successful
-            # If you have feedback, you can set RobotStatus.GRASPING_FAILED here
-            
-        except Exception as e:
-            print(f"\033[1;31m[{timestamp}] Grasping failed: {e}\033[0m")
-            arm.set_status(RobotStatus.GRASPING_FAILED)
-            return False
+        gripper.move_to_position(0.7)
+        print(f"\033[1;32m[{timestamp}] Gripper close command sent, duration: {(datetime.datetime.now() - gripper_start).total_seconds():.2f} seconds\033[0m")
+        time.sleep(0.5)
         
         # Move back to safe height
         if not arm.inverse_kinematic_movement(approach_pose, cartesian=True):
             print(f"\033[1;31m[{timestamp}] Failed to move back to safe height after pick for Task {task_num}\033[0m")
-            # Object might be dropped during this movement
-            arm.set_status(RobotStatus.OBJECT_DROPPED)
             return False
         
         # Print put information
         print(f"\033[1;36m[{timestamp}] Moving to put position for Task {task_num}: X={x_float:.4f}, Y={y_float:.4f}, Z={PUT_Z_HEIGHT:.4f}\033[0m")
         
         # Move to put position
-        if not arm.inverse_kinematic_movement(put_pose, cartesian=True, status_during_move=RobotStatus.MOVING_TO_RELEASE):
+        if not arm.inverse_kinematic_movement(put_pose, cartesian=True):
             print(f"\033[1;31m[{timestamp}] Failed to move to put position for Task {task_num}\033[0m")
-            arm.set_status(RobotStatus.MOVE_TO_RELEASE_FAILED)
             return False
         
         # Open gripper to release object
         print(f"\033[1;36m[{timestamp}] Opening gripper to release object for Task {task_num}\033[0m")
-        arm.set_status(RobotStatus.RELEASING)
         gripper_start = datetime.datetime.now()
-        
-        try:
-            gripper.move_to_position(0.0)
-            print(f"\033[1;32m[{timestamp}] Gripper open command sent, duration: {(datetime.datetime.now() - gripper_start).total_seconds():.2f} seconds\033[0m")
-            time.sleep(0.5)
-            
-            # Check if releasing was successful
-            # For now, we assume it was successful
-            # If you have feedback, you can set RobotStatus.RELEASING_FAILED here
-            
-        except Exception as e:
-            print(f"\033[1;31m[{timestamp}] Releasing failed: {e}\033[0m")
-            arm.set_status(RobotStatus.RELEASING_FAILED)
-            return False
+        gripper.move_to_position(0.0)
+        print(f"\033[1;32m[{timestamp}] Gripper open command sent, duration: {(datetime.datetime.now() - gripper_start).total_seconds():.2f} seconds\033[0m")
+        time.sleep(0.5)
         
         # Move back to safe height
         if not arm.inverse_kinematic_movement(approach_pose, cartesian=True):
@@ -517,27 +394,12 @@ def execute_pick_and_place(arm, gripper, task_coordinates):
         print(f"\033[1;32m[{timestamp}] Task {task_num}/{len(task_coordinates)} completed successfully\033[0m")
     
     print(f"\033[1;32m[{timestamp}] All pick and place tasks completed successfully\033[0m")
-    arm.set_status(RobotStatus.TASK_COMPLETED)
     return True
 
 
 def get_task_input():
     """Get task input from user"""
     print("\033[1;36mEnter task information for pick and place operations\033[0m")
-    
-    # 首先获取Y阈值设置
-    global Y_THRESHOLD_FOR_HELP
-    while True:
-        try:
-            threshold_input = input(f"\033[1;36mEnter Y threshold for require_help (default: {Y_THRESHOLD_FOR_HELP}): \033[0m")
-            if threshold_input.strip() == "":
-                # 如果用户直接按回车，使用默认值
-                break
-            Y_THRESHOLD_FOR_HELP = float(threshold_input)
-            print(f"\033[1;32mY threshold set to: {Y_THRESHOLD_FOR_HELP}\033[0m")
-            break
-        except ValueError:
-            print("\033[1;31mInvalid input. Please enter a valid number.\033[0m")
     
     # Get number of tasks
     while True:
@@ -560,15 +422,6 @@ def get_task_input():
                 print(f"\033[1;36m--- Task {i+1} ---\033[0m")
                 x = float(input(f"\033[1;36mEnter X coordinate for task {i+1}: \033[0m"))
                 y = float(input(f"\033[1;36mEnter Y coordinate for task {i+1}: \033[0m"))
-                
-                # 检查并提示用户Y坐标是否超过阈值
-                if y > Y_THRESHOLD_FOR_HELP:
-                    print(f"\033[1;33mWarning: Y coordinate {y:.4f} exceeds threshold {Y_THRESHOLD_FOR_HELP:.4f}")
-                    print(f"This task will trigger a require_help message.\033[0m")
-                    confirm = input(f"\033[1;36mContinue with this coordinate? (y/n): \033[0m")
-                    if confirm.lower() != 'y':
-                        continue
-                
                 task_coordinates.append((x, y))
                 break
             except ValueError:
@@ -577,21 +430,15 @@ def get_task_input():
     # Display the entered tasks
     print("\033[1;36m\nTask Summary:\033[0m")
     print("\033[1;36m------------------------------------\033[0m")
-    print(f"\033[1;36mY Threshold for Help: {Y_THRESHOLD_FOR_HELP:.4f}\033[0m")
+    print("\033[1;36m| Task |   X    |   Y    |   Z1   |   Z2   |\033[0m")
     print("\033[1;36m------------------------------------\033[0m")
-    print("\033[1;36m| Task |   X    |   Y    |   Z1   |   Z2   | Status |\033[0m")
-    print("\033[1;36m-------------------------------------------------\033[0m")
     
     for i, (x, y) in enumerate(task_coordinates):
-        status = "Normal"
-        if y > Y_THRESHOLD_FOR_HELP:
-            status = "⚠️ Requires Help"
-        print(f"\033[1;36m|  {i+1:2d}  | {x:.4f} | {y:.4f} | {PICK_Z_HEIGHT:.4f} | {PUT_Z_HEIGHT:.4f} | {status:>13s} |\033[0m")
+        print(f"\033[1;36m|  {i+1:2d}  | {x:.4f} | {y:.4f} | {PICK_Z_HEIGHT:.4f} | {PUT_Z_HEIGHT:.4f} |\033[0m")
     
-    print("\033[1;36m-------------------------------------------------\033[0m")
+    print("\033[1;36m------------------------------------\033[0m")
     print(f"\033[1;36mZ1 = {PICK_Z_HEIGHT} (Pick height)\033[0m")
     print(f"\033[1;36mZ2 = {PUT_Z_HEIGHT} (Put height)\033[0m")
-    print(f"\033[1;36mY Threshold = {Y_THRESHOLD_FOR_HELP} (Require help if Y > threshold)\033[0m")
     
     return task_coordinates
 
@@ -614,7 +461,6 @@ def main(args=None):
     with open(log_file_path, "a") as log_file:
         log_file.write(f"\n\n{'='*50}\n")
         log_file.write(f"Execution start time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        log_file.write(f"Y threshold for help: {Y_THRESHOLD_FOR_HELP}\n")
         log_file.write(f"{'='*50}\n")
     
     # Get task input from user
@@ -639,9 +485,6 @@ def main(args=None):
             arm = Gen3LiteArm()
             gripper = Gen3LiteGripper()
             
-            # Set initial status
-            arm.set_status(RobotStatus.WAITING_FOR_TASK)
-            
             # Execute pick and place sequence
             print(f"\033[1;36m[{timestamp}] Starting pick and place sequence...\033[0m")
             with open(log_file_path, "a") as log_file:
@@ -665,7 +508,6 @@ def main(args=None):
             # Only consider normal completion if task succeeded and no restart needed
             if success and not restart_needed:
                 print(f"\033[1;32m[{timestamp}] Task completed successfully\033[0m")
-                arm.set_status(RobotStatus.WAITING_FOR_TASK)
                 with open(log_file_path, "a") as log_file:
                     log_file.write(f"Task completed successfully {timestamp}\n")
                 break  # Normal completion, exit loop
@@ -741,9 +583,7 @@ def main(args=None):
 
 if __name__ == '__main__':
     print(f"\033[1;32m{'='*50}\033[0m")
-    print(f"\033[1;32m  Gen3Lite Robotic Arm Control (with Emergency Stop & Help Request)\033[0m")
-    print(f"\033[1;32m  Status Publishing at 10Hz enabled\033[0m")
-    print(f"\033[1;32m  Require Help Feature enabled\033[0m")
+    print(f"\033[1;32m  Gen3Lite Robotic Arm Control (with Emergency Stop)\033[0m")
     print(f"\033[1;32m  Execution time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\033[0m")
     print(f"\033[1;32m{'='*50}\033[0m")
     
