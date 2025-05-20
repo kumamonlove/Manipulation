@@ -14,9 +14,8 @@ from pyquaternion import Quaternion as PyQuaternion
 from threading import Thread, Lock
 from rclpy.callback_groups import ReentrantCallbackGroup
 from pymoveit2 import MoveIt2, MoveIt2State
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, String, Float32
 from .gen3lite_pymoveit2 import Gen3LiteGripper
-
 
 # Print script information and path
 script_dir = os.path.dirname(os.path.realpath(__file__))
@@ -29,9 +28,19 @@ PUT_Z_Y = 0.3
 PUT_Z_HEIGHT = 0.214   # Z height for put operations
 SAFE_Z_HEIGHT = 0.3    # Safe Z height for movement between operations
 
+# Recovery parameters
+RECOVERY_X = 0.3       # Safe X position for recovery
+RECOVERY_Y = 0.0       # Safe Y position for recovery  
+RECOVERY_Z = 0.4       # Safe Z position for recovery (higher for clearance)
+MAX_TASK_RETRIES = 3   # Maximum retries per task
+
+# Gripper parameters
+GRIPPER_DETECTION_THRESHOLD = 0.1  # Threshold for detecting grip failure
+GRIPPER_CLOSE_TARGET = 0.7        # Target position when closing gripper
+GRIPPER_OPEN_TARGET = 0.0         # Target position when opening gripper
+
 # Y coordinate threshold for require_help message
-# 可以在程序开始时设置这个阈值
-Y_THRESHOLD_FOR_HELP = 0.35  # 默认阈值，如果Y > 0.35，则发送require_help
+Y_THRESHOLD_FOR_HELP = 0.35  # Default threshold, if Y > 0.35, send require_help
 
 # Robot status constants
 class RobotStatus:
@@ -47,7 +56,9 @@ class RobotStatus:
     OBJECT_DROPPED = "object_dropped"
     EMERGENCY_STOP = "emergency_stop"
     TASK_COMPLETED = "task_completed"
-    REQUIRE_HELP = "require_help"  # 新增状态
+    REQUIRE_HELP = "require_help"
+    RECOVERING = "recovering"         # New status for recovery operations
+    RETRYING_TASK = "retrying_task"   # New status for task retry
 
 class Gen3LiteArm:
     def __init__(self):
@@ -66,7 +77,17 @@ class Gen3LiteArm:
         self.status_lock = Lock()
         self.status_publisher = self.node.create_publisher(String, '/robot_status', 10)
         
-        # 新增：require_help消息发布器
+        # Gripper position subscriber for monitoring gripper status
+        self.gripper_position = None
+        self.gripper_subscription = self.node.create_subscription(
+            Float32, 
+            '/gripper_position', 
+            self.gripper_callback, 
+            10,
+            callback_group=self.callback_group
+        )
+        
+        # New: require_help message publisher
         self.require_help_publisher = self.node.create_publisher(String, '/require_help', 10)
         
         # Subscribe to emergency stop topic
@@ -116,6 +137,10 @@ class Gen3LiteArm:
         self.start_time = datetime.datetime.now()
         print(f"\033[1;36mSystem start time: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}\033[0m")
 
+    def gripper_callback(self, msg):
+        """Callback for monitoring the gripper position"""
+        self.gripper_position = msg.data
+
     def set_status(self, status):
         """Thread-safe status setting"""
         with self.status_lock:
@@ -132,10 +157,10 @@ class Gen3LiteArm:
             self.status_publisher.publish(status_msg)
 
     def publish_require_help(self, x, y):
-        """发布require_help消息，包含需要帮助的坐标点"""
+        """Publish require_help message with coordinates"""
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        # 创建包含坐标信息的JSON消息
+        # Create JSON message with coordinates
         help_data = {
             "timestamp": timestamp,
             "coordinates": {
@@ -279,6 +304,85 @@ class Gen3LiteArm:
             self.moveit2.max_velocity = original_velocity
             self.moveit2.max_acceleration = original_acceleration
 
+    def move_to_recovery_position(self):
+        """Move to a safe recovery position"""
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"\033[1;36m[{timestamp}] Moving to recovery position...\033[0m")
+        
+        self.set_status(RobotStatus.RECOVERING)
+        
+        # Create a vertical orientation quaternion
+        vertical_orientation = PyQuaternion(array=np.array([0.0, 1.0, 0.0, 0.0]))
+        
+        # First move straight up for safety
+        initial_recovery_pose = Pose()
+        initial_recovery_pose.position.x = self.current_pose.position.x
+        initial_recovery_pose.position.y = self.current_pose.position.y
+        initial_recovery_pose.position.z = RECOVERY_Z
+        initial_recovery_pose.orientation.x = float(vertical_orientation[0])
+        initial_recovery_pose.orientation.y = float(vertical_orientation[1])
+        initial_recovery_pose.orientation.z = float(vertical_orientation[2])
+        initial_recovery_pose.orientation.w = float(vertical_orientation[3])
+        
+        # Move up first
+        print(f"\033[1;36m[{timestamp}] First moving up to Z={RECOVERY_Z} for safety\033[0m")
+        success_up = self.inverse_kinematic_movement(initial_recovery_pose, cartesian=True)
+        
+        if not success_up:
+            print(f"\033[1;31m[{timestamp}] Failed to move up during recovery\033[0m")
+            return False
+            
+        # Then move to defined recovery position
+        recovery_pose = Pose()
+        recovery_pose.position.x = RECOVERY_X
+        recovery_pose.position.y = RECOVERY_Y
+        recovery_pose.position.z = RECOVERY_Z
+        recovery_pose.orientation.x = float(vertical_orientation[0])
+        recovery_pose.orientation.y = float(vertical_orientation[1])
+        recovery_pose.orientation.z = float(vertical_orientation[2])
+        recovery_pose.orientation.w = float(vertical_orientation[3])
+        
+        print(f"\033[1;36m[{timestamp}] Moving to recovery position: X={RECOVERY_X}, Y={RECOVERY_Y}, Z={RECOVERY_Z}\033[0m")
+        success = self.inverse_kinematic_movement(recovery_pose, cartesian=False)
+        
+        if success:
+            print(f"\033[1;32m[{timestamp}] Successfully moved to recovery position\033[0m")
+            return True
+        else:
+            print(f"\033[1;31m[{timestamp}] Failed to move to recovery position\033[0m")
+            return False
+
+    def check_gripper_success(self, is_closing=True):
+        """
+        Check if the gripper operation was successful
+        is_closing: True if checking grip success, False if checking release success
+        """
+        # Wait for gripper to settle
+        time.sleep(0.5)
+        
+        # Get current gripper position
+        if self.gripper_position is None:
+            print("\033[1;33mNo gripper position data available, assuming success\033[0m")
+            return True
+            
+        if is_closing:
+            # For closing, check if position is near the target close position
+            # If position is too close to open, it means object wasn't gripped
+            if abs(self.gripper_position - GRIPPER_OPEN_TARGET) < GRIPPER_DETECTION_THRESHOLD:
+                print(f"\033[1;31mGripper failed to grasp object: position={self.gripper_position:.4f}\033[0m")
+                return False
+            else:
+                print(f"\033[1;32mGripper successfully grasped object: position={self.gripper_position:.4f}\033[0m")
+                return True
+        else:
+            # For opening, check if position is near the target open position
+            if abs(self.gripper_position - GRIPPER_OPEN_TARGET) > GRIPPER_DETECTION_THRESHOLD:
+                print(f"\033[1;31mGripper failed to release object: position={self.gripper_position:.4f}\033[0m")
+                return False
+            else:
+                print(f"\033[1;32mGripper successfully released object: position={self.gripper_position:.4f}\033[0m")
+                return True
+
     def inverse_kinematic_movement(self, target_pose, cartesian=False, status_during_move=None):
         """Execute inverse kinematic movement to target pose"""
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -381,13 +485,194 @@ class Gen3LiteArm:
         print(f"\033[1;36mSystem runtime: {run_time.total_seconds():.2f} seconds\033[0m")
 
 
+def execute_pick_and_place_task(arm, gripper, x, y, retries=0):
+    """Execute a single pick and place task with retry capability"""
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    if retries > 0:
+        print(f"\033[1;33m[{timestamp}] Retrying task (attempt {retries+1}/{MAX_TASK_RETRIES+1}): X={x:.4f}, Y={y:.4f}\033[0m")
+        arm.set_status(RobotStatus.RETRYING_TASK)
+    else:
+        print(f"\033[1;36m[{timestamp}] Executing pick and place task: X={x:.4f}, Y={y:.4f}\033[0m")
+    
+    # Create a vertical orientation quaternion
+    vertical_orientation = PyQuaternion(array=np.array([0.0, 1.0, 0.0, 0.0]))
+    
+    # Create poses for the task
+    approach_pose = Pose()
+    approach_pose.position.x = float(x)
+    approach_pose.position.y = float(y)
+    approach_pose.position.z = float(SAFE_Z_HEIGHT)
+    approach_pose.orientation.x = float(vertical_orientation[0])
+    approach_pose.orientation.y = float(vertical_orientation[1])
+    approach_pose.orientation.z = float(vertical_orientation[2])
+    approach_pose.orientation.w = float(vertical_orientation[3])
+    
+    pick_pose = Pose()
+    pick_pose.position.x = float(x)
+    pick_pose.position.y = float(y)
+    pick_pose.position.z = float(PICK_Z_HEIGHT)
+    pick_pose.orientation.x = float(vertical_orientation[0])
+    pick_pose.orientation.y = float(vertical_orientation[1])
+    pick_pose.orientation.z = float(vertical_orientation[2])
+    pick_pose.orientation.w = float(vertical_orientation[3])
+    
+    put_pose = Pose()
+    put_pose.position.x = float(PUT_Z_X)
+    put_pose.position.y = float(PUT_Z_Y)
+    put_pose.position.z = float(PUT_Z_HEIGHT)
+    put_pose.orientation.x = float(vertical_orientation[0])
+    put_pose.orientation.y = float(vertical_orientation[1])
+    put_pose.orientation.z = float(vertical_orientation[2])
+    put_pose.orientation.w = float(vertical_orientation[3])
+    
+    try:
+        # Move to position above pick position first
+        if not arm.inverse_kinematic_movement(approach_pose, cartesian=True, status_during_move=RobotStatus.MOVING_TO_TARGET):
+            print(f"\033[1;31m[{timestamp}] Failed to move to approach position\033[0m")
+            arm.set_status(RobotStatus.MOVE_TO_TARGET_FAILED)
+            
+            # Try recovery if we still have retries left
+            if retries < MAX_TASK_RETRIES:
+                print(f"\033[1;33m[{timestamp}] Moving to recovery position before retry\033[0m")
+                if arm.move_to_recovery_position():
+                    return execute_pick_and_place_task(arm, gripper, x, y, retries + 1)
+            return False
+        
+        # Move to pick position
+        if not arm.inverse_kinematic_movement(pick_pose, cartesian=True, status_during_move=RobotStatus.MOVING_TO_TARGET):
+            print(f"\033[1;31m[{timestamp}] Failed to move to pick position\033[0m")
+            arm.set_status(RobotStatus.MOVE_TO_TARGET_FAILED)
+            
+            # Try recovery if we still have retries left
+            if retries < MAX_TASK_RETRIES:
+                print(f"\033[1;33m[{timestamp}] Moving to recovery position before retry\033[0m")
+                if arm.move_to_recovery_position():
+                    return execute_pick_and_place_task(arm, gripper, x, y, retries + 1)
+            return False
+        
+        # Close gripper to grasp object
+        print(f"\033[1;36m[{timestamp}] Closing gripper to grasp object\033[0m")
+        arm.set_status(RobotStatus.GRASPING)
+        
+        try:
+            gripper.move_to_position(GRIPPER_CLOSE_TARGET)
+            time.sleep(0.5)
+            
+            # Check if gripping was successful
+            if not arm.check_gripper_success(is_closing=True):
+                arm.set_status(RobotStatus.GRASPING_FAILED)
+                
+                # Try recovery if we still have retries left
+                if retries < MAX_TASK_RETRIES:
+                    print(f"\033[1;33m[{timestamp}] Grip failed - moving to recovery position before retry\033[0m")
+                    if arm.move_to_recovery_position():
+                        return execute_pick_and_place_task(arm, gripper, x, y, retries + 1)
+                return False
+                
+        except Exception as e:
+            print(f"\033[1;31m[{timestamp}] Grasping failed: {e}\033[0m")
+            arm.set_status(RobotStatus.GRASPING_FAILED)
+            
+            # Try recovery if we still have retries left
+            if retries < MAX_TASK_RETRIES:
+                print(f"\033[1;33m[{timestamp}] Moving to recovery position before retry\033[0m")
+                if arm.move_to_recovery_position():
+                    return execute_pick_and_place_task(arm, gripper, x, y, retries + 1)
+            return False
+        
+        # Move back to safe height
+        if not arm.inverse_kinematic_movement(approach_pose, cartesian=True):
+            print(f"\033[1;31m[{timestamp}] Failed to move back to safe height after pick\033[0m")
+            # Object might be dropped during this movement
+            arm.set_status(RobotStatus.OBJECT_DROPPED)
+            
+            # Try recovery if we still have retries left
+            if retries < MAX_TASK_RETRIES:
+                print(f"\033[1;33m[{timestamp}] Moving to recovery position before retry\033[0m")
+                if arm.move_to_recovery_position():
+                    return execute_pick_and_place_task(arm, gripper, x, y, retries + 1)
+            return False
+        
+        # Move to put position
+        if not arm.inverse_kinematic_movement(put_pose, cartesian=True, status_during_move=RobotStatus.MOVING_TO_RELEASE):
+            print(f"\033[1;31m[{timestamp}] Failed to move to put position\033[0m")
+            arm.set_status(RobotStatus.MOVE_TO_RELEASE_FAILED)
+            
+            # Try recovery if we still have retries left
+            if retries < MAX_TASK_RETRIES:
+                print(f"\033[1;33m[{timestamp}] Moving to recovery position before retry\033[0m")
+                if arm.move_to_recovery_position():
+                    return execute_pick_and_place_task(arm, gripper, x, y, retries + 1)
+            return False
+        
+        # Open gripper to release object
+        print(f"\033[1;36m[{timestamp}] Opening gripper to release object\033[0m")
+        arm.set_status(RobotStatus.RELEASING)
+        
+        try:
+            gripper.move_to_position(GRIPPER_OPEN_TARGET)
+            time.sleep(0.5)
+            
+            # Check if releasing was successful
+            if not arm.check_gripper_success(is_closing=False):
+                arm.set_status(RobotStatus.RELEASING_FAILED)
+                
+                # Try recovery if we still have retries left
+                if retries < MAX_TASK_RETRIES:
+                    print(f"\033[1;33m[{timestamp}] Release failed - moving to recovery position before retry\033[0m")
+                    if arm.move_to_recovery_position():
+                        return execute_pick_and_place_task(arm, gripper, x, y, retries + 1)
+                return False
+                
+        except Exception as e:
+            print(f"\033[1;31m[{timestamp}] Releasing failed: {e}\033[0m")
+            arm.set_status(RobotStatus.RELEASING_FAILED)
+            
+            # Try recovery if we still have retries left
+            if retries < MAX_TASK_RETRIES:
+                print(f"\033[1;33m[{timestamp}] Moving to recovery position before retry\033[0m")
+                if arm.move_to_recovery_position():
+                    return execute_pick_and_place_task(arm, gripper, x, y, retries + 1)
+            return False
+        
+        # Move back to safe height
+        if not arm.inverse_kinematic_movement(approach_pose, cartesian=True):
+            print(f"\033[1;31m[{timestamp}] Failed to move back to safe height after put\033[0m")
+            
+            # Already released object, so just try to recover
+            if retries < MAX_TASK_RETRIES:
+                print(f"\033[1;33m[{timestamp}] Moving to recovery position\033[0m")
+                arm.move_to_recovery_position()
+            return False
+        
+        # Task completed successfully
+        print(f"\033[1;32m[{timestamp}] Task completed successfully: X={x:.4f}, Y={y:.4f}\033[0m")
+        if retries > 0:
+            print(f"\033[1;32m[{timestamp}] Task succeeded after {retries+1} attempts\033[0m")
+        return True
+        
+    except Exception as e:
+        # Unexpected error
+        print(f"\033[1;31m[{timestamp}] Unexpected error during task execution: {e}\033[0m")
+        
+        # Try recovery if we still have retries left
+        if retries < MAX_TASK_RETRIES:
+            print(f"\033[1;33m[{timestamp}] Moving to recovery position before retry\033[0m")
+            if arm.move_to_recovery_position():
+                return execute_pick_and_place_task(arm, gripper, x, y, retries + 1)
+        return False
+
+
 def execute_pick_and_place(arm, gripper, task_coordinates):
     """Execute a sequence of pick and place tasks based on the given coordinates"""
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"\033[1;36m[{timestamp}] Starting pick and place sequence with {len(task_coordinates)} tasks\033[0m")
     
-    # Create a vertical orientation quaternion
-    vertical_orientation = PyQuaternion(array=np.array([0.0, 1.0, 0.0, 0.0]))
+    # Track task results
+    successful_tasks = 0
+    failed_tasks = 0
+    skipped_tasks = 0
     
     for i, (x, y) in enumerate(task_coordinates):
         task_num = i + 1
@@ -397,144 +682,120 @@ def execute_pick_and_place(arm, gripper, task_coordinates):
         x_float = float(x)
         y_float = float(y)
         
-        # 检查Y坐标是否超过阈值
+        # Check if Y coordinate exceeds threshold
         if y_float > Y_THRESHOLD_FOR_HELP:
             print(f"\033[1;33m[{timestamp}] Y coordinate {y_float:.4f} exceeds threshold {Y_THRESHOLD_FOR_HELP:.4f}\033[0m")
             print(f"\033[1;33m[{timestamp}] Publishing require_help message...\033[0m")
             
-            # 发布require_help消息
+            # Publish require_help message
             arm.publish_require_help(x_float, y_float)
             
-            # 设置状态为require_help
+            # Set status to require_help
             arm.set_status(RobotStatus.REQUIRE_HELP)
             
-            # 可以选择跳过这个任务或者等待人工干预
+            # Skip this task
             print(f"\033[1;33m[{timestamp}] Task {task_num} requires help - skipping to next task\033[0m")
+            skipped_tasks += 1
             continue
         
-        # Create poses for the task
-        approach_pose = Pose()
-        approach_pose.position.x = x_float
-        approach_pose.position.y = y_float
-        approach_pose.position.z = float(SAFE_Z_HEIGHT)
-        approach_pose.orientation.x = float(vertical_orientation[0])
-        approach_pose.orientation.y = float(vertical_orientation[1])
-        approach_pose.orientation.z = float(vertical_orientation[2])
-        approach_pose.orientation.w = float(vertical_orientation[3])
-        
-        pick_pose = Pose()
-        pick_pose.position.x = x_float
-        pick_pose.position.y = y_float
-        pick_pose.position.z = float(PICK_Z_HEIGHT)
-        pick_pose.orientation.x = float(vertical_orientation[0])
-        pick_pose.orientation.y = float(vertical_orientation[1])
-        pick_pose.orientation.z = float(vertical_orientation[2])
-        pick_pose.orientation.w = float(vertical_orientation[3])
-        
-        put_pose = Pose()
-        put_pose.position.x = float(PUT_Z_X)
-        put_pose.position.y = float(PUT_Z_Y)
-        put_pose.position.z = float(PUT_Z_HEIGHT)
-        put_pose.orientation.x = float(vertical_orientation[0])
-        put_pose.orientation.y = float(vertical_orientation[1])
-        put_pose.orientation.z = float(vertical_orientation[2])
-        put_pose.orientation.w = float(vertical_orientation[3])
-        
-        # Print task information
-        print(f"\033[1;36m[{timestamp}] Moving to pick position for Task {task_num}: X={x_float:.4f}, Y={y_float:.4f}, Z={PICK_Z_HEIGHT:.4f}\033[0m")
-        
-        # Move to position above pick position first
-        if not arm.inverse_kinematic_movement(approach_pose, cartesian=True, status_during_move=RobotStatus.MOVING_TO_TARGET):
-            print(f"\033[1;31m[{timestamp}] Failed to move to approach position for Task {task_num}\033[0m")
-            arm.set_status(RobotStatus.MOVE_TO_TARGET_FAILED)
-            return False
-        
-        # Move to pick position
-        if not arm.inverse_kinematic_movement(pick_pose, cartesian=True, status_during_move=RobotStatus.MOVING_TO_TARGET):
-            print(f"\033[1;31m[{timestamp}] Failed to move to pick position for Task {task_num}\033[0m")
-            arm.set_status(RobotStatus.MOVE_TO_TARGET_FAILED)
-            return False
-        
-        # Close gripper to grasp object
-        print(f"\033[1;36m[{timestamp}] Closing gripper to grasp object for Task {task_num}\033[0m")
-        arm.set_status(RobotStatus.GRASPING)
-        gripper_start = datetime.datetime.now()
-        
-        try:
-            gripper.move_to_position(0.7)
-            print(f"\033[1;32m[{timestamp}] Gripper close command sent, duration: {(datetime.datetime.now() - gripper_start).total_seconds():.2f} seconds\033[0m")
-            time.sleep(0.5)
+        # Execute the task with retry capability
+        if execute_pick_and_place_task(arm, gripper, x_float, y_float):
+            successful_tasks += 1
+        else:
+            failed_tasks += 1
+            print(f"\033[1;31m[{timestamp}] Task {task_num} failed after all retry attempts\033[0m")
             
-            # Check if grasping was successful (you may need to implement actual force/position feedback)
-            # For now, we assume it was successful
-            # If you have feedback, you can set RobotStatus.GRASPING_FAILED here
-            
-        except Exception as e:
-            print(f"\033[1;31m[{timestamp}] Grasping failed: {e}\033[0m")
-            arm.set_status(RobotStatus.GRASPING_FAILED)
-            return False
-        
-        # Move back to safe height
-        if not arm.inverse_kinematic_movement(approach_pose, cartesian=True):
-            print(f"\033[1;31m[{timestamp}] Failed to move back to safe height after pick for Task {task_num}\033[0m")
-            # Object might be dropped during this movement
-            arm.set_status(RobotStatus.OBJECT_DROPPED)
-            return False
-        
-        # Print put information
-        print(f"\033[1;36m[{timestamp}] Moving to put position for Task {task_num}: X={x_float:.4f}, Y={y_float:.4f}, Z={PUT_Z_HEIGHT:.4f}\033[0m")
-        
-        # Move to put position
-        if not arm.inverse_kinematic_movement(put_pose, cartesian=True, status_during_move=RobotStatus.MOVING_TO_RELEASE):
-            print(f"\033[1;31m[{timestamp}] Failed to move to put position for Task {task_num}\033[0m")
-            arm.set_status(RobotStatus.MOVE_TO_RELEASE_FAILED)
-            return False
-        
-        # Open gripper to release object
-        print(f"\033[1;36m[{timestamp}] Opening gripper to release object for Task {task_num}\033[0m")
-        arm.set_status(RobotStatus.RELEASING)
-        gripper_start = datetime.datetime.now()
-        
-        try:
-            gripper.move_to_position(0.0)
-            print(f"\033[1;32m[{timestamp}] Gripper open command sent, duration: {(datetime.datetime.now() - gripper_start).total_seconds():.2f} seconds\033[0m")
-            time.sleep(0.5)
-            
-            # Check if releasing was successful
-            # For now, we assume it was successful
-            # If you have feedback, you can set RobotStatus.RELEASING_FAILED here
-            
-        except Exception as e:
-            print(f"\033[1;31m[{timestamp}] Releasing failed: {e}\033[0m")
-            arm.set_status(RobotStatus.RELEASING_FAILED)
-            return False
-        
-        # Move back to safe height
-        if not arm.inverse_kinematic_movement(approach_pose, cartesian=True):
-            print(f"\033[1;31m[{timestamp}] Failed to move back to safe height after put for Task {task_num}\033[0m")
-            return False
-        
-        print(f"\033[1;32m[{timestamp}] Task {task_num}/{len(task_coordinates)} completed successfully\033[0m")
+            # Even if this task failed, try to continue with the next tasks
+            # First move to a safe recovery position
+            arm.move_to_recovery_position()
     
-    print(f"\033[1;32m[{timestamp}] All pick and place tasks completed successfully\033[0m")
-    arm.set_status(RobotStatus.TASK_COMPLETED)
-    return True
+    print(f"\033[1;36m[{timestamp}] Pick and place sequence completed\033[0m")
+    print(f"\033[1;36m[{timestamp}] Results: {successful_tasks} successful, {failed_tasks} failed, {skipped_tasks} skipped\033[0m")
+    
+    if failed_tasks == 0 and skipped_tasks == 0:
+        print(f"\033[1;32m[{timestamp}] All tasks completed successfully!\033[0m")
+        arm.set_status(RobotStatus.TASK_COMPLETED)
+        return True
+    elif successful_tasks > 0:
+        print(f"\033[1;33m[{timestamp}] Some tasks completed successfully, but some failed or were skipped\033[0m")
+        arm.set_status(RobotStatus.TASK_COMPLETED)
+        return True
+    else:
+        print(f"\033[1;31m[{timestamp}] All tasks failed or were skipped\033[0m")
+        return False
 
 
 def get_task_input():
     """Get task input from user"""
     print("\033[1;36mEnter task information for pick and place operations\033[0m")
     
-    # 首先获取Y阈值设置
+    # First get Y threshold setting
     global Y_THRESHOLD_FOR_HELP
     while True:
         try:
             threshold_input = input(f"\033[1;36mEnter Y threshold for require_help (default: {Y_THRESHOLD_FOR_HELP}): \033[0m")
             if threshold_input.strip() == "":
-                # 如果用户直接按回车，使用默认值
+                # If user just presses enter, use default value
                 break
             Y_THRESHOLD_FOR_HELP = float(threshold_input)
             print(f"\033[1;32mY threshold set to: {Y_THRESHOLD_FOR_HELP}\033[0m")
+            break
+        except ValueError:
+            print("\033[1;31mInvalid input. Please enter a valid number.\033[0m")
+    
+    # Get max retries setting
+    global MAX_TASK_RETRIES
+    while True:
+        try:
+            retries_input = input(f"\033[1;36mEnter maximum retries per task (default: {MAX_TASK_RETRIES}): \033[0m")
+            if retries_input.strip() == "":
+                # If user just presses enter, use default value
+                break
+            MAX_TASK_RETRIES = int(retries_input)
+            if MAX_TASK_RETRIES < 0:
+                print("\033[1;31mRetries must be 0 or greater. Using default value.\033[0m")
+                MAX_TASK_RETRIES = 3
+            print(f"\033[1;32mMaximum retries per task set to: {MAX_TASK_RETRIES}\033[0m")
+            break
+        except ValueError:
+            print("\033[1;31mInvalid input. Please enter a valid number.\033[0m")
+    
+    # Get recovery position settings
+    global RECOVERY_X, RECOVERY_Y, RECOVERY_Z
+    print("\033[1;36mEnter recovery position coordinates (press Enter to use defaults):\033[0m")
+    
+    # X coordinate
+    while True:
+        try:
+            recovery_x_input = input(f"\033[1;36mRecovery position X (default: {RECOVERY_X}): \033[0m")
+            if recovery_x_input.strip() == "":
+                break
+            RECOVERY_X = float(recovery_x_input)
+            print(f"\033[1;32mRecovery X set to: {RECOVERY_X}\033[0m")
+            break
+        except ValueError:
+            print("\033[1;31mInvalid input. Please enter a valid number.\033[0m")
+    
+    # Y coordinate
+    while True:
+        try:
+            recovery_y_input = input(f"\033[1;36mRecovery position Y (default: {RECOVERY_Y}): \033[0m")
+            if recovery_y_input.strip() == "":
+                break
+            RECOVERY_Y = float(recovery_y_input)
+            print(f"\033[1;32mRecovery Y set to: {RECOVERY_Y}\033[0m")
+            break
+        except ValueError:
+            print("\033[1;31mInvalid input. Please enter a valid number.\033[0m")
+    
+    # Z coordinate
+    while True:
+        try:
+            recovery_z_input = input(f"\033[1;36mRecovery position Z (default: {RECOVERY_Z}): \033[0m")
+            if recovery_z_input.strip() == "":
+                break
+            RECOVERY_Z = float(recovery_z_input)
+            print(f"\033[1;32mRecovery Z set to: {RECOVERY_Z}\033[0m")
             break
         except ValueError:
             print("\033[1;31mInvalid input. Please enter a valid number.\033[0m")
@@ -561,7 +822,7 @@ def get_task_input():
                 x = float(input(f"\033[1;36mEnter X coordinate for task {i+1}: \033[0m"))
                 y = float(input(f"\033[1;36mEnter Y coordinate for task {i+1}: \033[0m"))
                 
-                # 检查并提示用户Y坐标是否超过阈值
+                # Check and warn if Y coordinate exceeds threshold
                 if y > Y_THRESHOLD_FOR_HELP:
                     print(f"\033[1;33mWarning: Y coordinate {y:.4f} exceeds threshold {Y_THRESHOLD_FOR_HELP:.4f}")
                     print(f"This task will trigger a require_help message.\033[0m")
@@ -574,10 +835,12 @@ def get_task_input():
             except ValueError:
                 print("\033[1;31mInvalid input. Please enter valid numbers for coordinates.\033[0m")
     
-    # Display the entered tasks
+    # Display the entered tasks and settings
     print("\033[1;36m\nTask Summary:\033[0m")
     print("\033[1;36m------------------------------------\033[0m")
     print(f"\033[1;36mY Threshold for Help: {Y_THRESHOLD_FOR_HELP:.4f}\033[0m")
+    print(f"\033[1;36mMax Retries per Task: {MAX_TASK_RETRIES}\033[0m")
+    print(f"\033[1;36mRecovery Position: X={RECOVERY_X:.4f}, Y={RECOVERY_Y:.4f}, Z={RECOVERY_Z:.4f}\033[0m")
     print("\033[1;36m------------------------------------\033[0m")
     print("\033[1;36m| Task |   X    |   Y    |   Z1   |   Z2   | Status |\033[0m")
     print("\033[1;36m-------------------------------------------------\033[0m")
@@ -615,6 +878,8 @@ def main(args=None):
         log_file.write(f"\n\n{'='*50}\n")
         log_file.write(f"Execution start time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         log_file.write(f"Y threshold for help: {Y_THRESHOLD_FOR_HELP}\n")
+        log_file.write(f"Max retries per task: {MAX_TASK_RETRIES}\n")
+        log_file.write(f"Recovery position: X={RECOVERY_X}, Y={RECOVERY_Y}, Z={RECOVERY_Z}\n")
         log_file.write(f"{'='*50}\n")
     
     # Get task input from user
@@ -741,9 +1006,11 @@ def main(args=None):
 
 if __name__ == '__main__':
     print(f"\033[1;32m{'='*50}\033[0m")
-    print(f"\033[1;32m  Gen3Lite Robotic Arm Control (with Emergency Stop & Help Request)\033[0m")
+    print(f"\033[1;32m  Gen3Lite Robotic Arm Control (with Emergency Stop & Recovery)\033[0m")
     print(f"\033[1;32m  Status Publishing at 10Hz enabled\033[0m")
     print(f"\033[1;32m  Require Help Feature enabled\033[0m")
+    print(f"\033[1;32m  Task-Level Retry System enabled\033[0m")
+    print(f"\033[1;32m  Gripper Success Detection enabled\033[0m") 
     print(f"\033[1;32m  Execution time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\033[0m")
     print(f"\033[1;32m{'='*50}\033[0m")
     
