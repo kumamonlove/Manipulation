@@ -25,7 +25,8 @@ setup(
         'gen3lite_pymoveit2 = manipulation.gen3lite_pymoveit2:main',
         'safe = manipulation.safe:main',
         'monitor = manipulation.monitor:main',
-        'help = manipulation.help:main'
+        'help = manipulation.help:main',
+        'simulated_gripper = manipulation.simulated_gripper_publisher:main'
         ],
     },
 )
