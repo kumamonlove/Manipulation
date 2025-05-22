@@ -11,7 +11,7 @@ import json
 from rclpy.node import Node
 from geometry_msgs.msg import Pose
 from pyquaternion import Quaternion as PyQuaternion
-from threading import Thread, Lock, Event
+from threading import Thread, Lock
 from rclpy.callback_groups import ReentrantCallbackGroup
 from pymoveit2 import MoveIt2, MoveIt2State
 from std_msgs.msg import Bool, String, Float32
@@ -25,9 +25,9 @@ print(f"\033[1;36mScript execution path: {script_dir}\033[0m")
 # =================== CONSTANTS ===================
 # Z positions
 PICK_Z_HEIGHT = 0.13  # Z height for pick operations
-PUT_Z_X = 0.141
-PUT_Z_Y = 0.45
-PUT_Z_HEIGHT = 0.129   # Z height for put operations
+PUT_Z_X = 0.16
+PUT_Z_Y = 0.3
+PUT_Z_HEIGHT = 0.214   # Z height for put operations
 SAFE_Z_HEIGHT = 0.3    # Safe Z height for movement between operations
 
 # Recovery parameters
@@ -74,11 +74,6 @@ class Gen3LiteArm:
         self.current_pose = Pose()
         self.restart_ready = False
         self.emergency_operation_in_progress = False
-        
-        # -------- Object drop monitoring --------
-        self.object_drop_detected = Event()
-        self.object_drop_monitoring_active = False
-        self.gripper_closed = False  # Track if gripper should be holding an object
 
         # -------- Status pub --------
         self.current_status = RobotStatus.WAITING_FOR_TASK
@@ -141,7 +136,7 @@ class Gen3LiteArm:
         self.moveit2.max_acceleration = 0.1
         self.moveit2.cartesian_jump_threshold = 0.0
 
-        # 10 Hz status pub
+        # 10 Hz status pub
         self.status_timer = self.node.create_timer(0.1, self.publish_status)
 
         print("\033[1;32mGen3LiteArm ready. Emergency handler active.\033[0m")
@@ -151,46 +146,6 @@ class Gen3LiteArm:
     def gripper_callback(self, msg: Float32):
         self.gripper_position = msg.data
         self.gripper_recent.append(msg.data)
-        
-        # Real-time object drop detection
-        if self.object_drop_monitoring_active and self.gripper_closed:
-            if self.gripper_position > OBJECT_DROPPED_THRESHOLD:
-                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                print(f"\033[1;31m[{timestamp}] !!! OBJECT DROPPED DETECTED !!! Gripper position: {self.gripper_position:.4f} > {OBJECT_DROPPED_THRESHOLD}\033[0m")
-                self.node.get_logger().error(f"Object dropped! Gripper position: {self.gripper_position}")
-                
-                # Set the drop detected event
-                self.object_drop_detected.set()
-                
-                # Change status to object dropped
-                self.set_status(RobotStatus.OBJECT_DROPPED)
-                
-                # Stop current execution
-                self.stop_current_execution()
-
-    def start_drop_monitoring(self):
-        """Start monitoring for object drops"""
-        self.object_drop_monitoring_active = True
-        self.object_drop_detected.clear()
-        print("\033[1;36mStarted object drop monitoring\033[0m")
-
-    def stop_drop_monitoring(self):
-        """Stop monitoring for object drops"""
-        self.object_drop_monitoring_active = False
-        self.object_drop_detected.clear()
-        print("\033[1;36mStopped object drop monitoring\033[0m")
-
-    def stop_current_execution(self):
-        """Stop current robot movement execution"""
-        try:
-            future = self.moveit2.get_execution_future()
-            if future and not future.done():
-                future.cancel()
-                print("\033[1;33mCanceled current execution due to object drop\033[0m")
-            self.node.get_logger().info("Current execution stopped due to object drop")
-        except Exception as e:
-            self.node.get_logger().error(f"Failed to stop execution: {e}")
-            print(f"\033[1;31mFailed to stop execution: {e}\033[0m")
 
     def object_dropped(self) -> bool:
         return (
@@ -199,21 +154,15 @@ class Gen3LiteArm:
         )
 
     def print_gripper_stats(self):
-        """Print last‑second gripper stats every 1 s."""
+        """Print last‑second gripper stats every 1 s."""
         if len(self.gripper_recent) == 0:
             return
         vals = list(self.gripper_recent)
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-        
-        # Add warning if close to drop threshold
-        warning = ""
-        if self.gripper_closed and max(vals) > (OBJECT_DROPPED_THRESHOLD - 0.05):
-            warning = " \033[1;33m⚠️  NEAR DROP THRESHOLD!\033[0m"
-        
         print(
             f"\033[1;34m[{timestamp}] Gripper last 5 vals: "
             + ", ".join(f"{v:.4f}" for v in vals)
-            + f" | min={min(vals):.4f} max={max(vals):.4f}{warning}\033[0m"
+            + f" | min={min(vals):.4f} max={max(vals):.4f}\033[0m"
         )
 
     # ------------------- Status utils -------------------
@@ -228,6 +177,7 @@ class Gen3LiteArm:
         msg = String()
         msg.data = self.current_status
         self.status_publisher.publish(msg)
+
 
     def publish_require_help(self, x, y):
         """Publish require_help message with coordinates"""
@@ -249,6 +199,7 @@ class Gen3LiteArm:
         
         print(f"\033[1;33m[{timestamp}] Published require_help message for coordinates X={x:.4f}, Y={y:.4f}\033[0m")
         print(f"\033[1;33m[{timestamp}] Help message content: {help_msg.data}\033[0m")
+
 
     def emergency_callback(self, msg):
         """Handle emergency stop messages"""
@@ -465,6 +416,9 @@ class Gen3LiteArm:
         # Set status during movement if provided
         if status_during_move:
             self.set_status(status_during_move)
+        
+        # Modified: No longer checking emergency state, as emergency state will be handled immediately in the emergency callback
+        # and will automatically reset, allowing the system to continue running
             
         self.node.get_logger().info(
             f"Moving to position: {target_pose.position} {target_pose.orientation} with cartesian={cartesian}"
@@ -491,12 +445,6 @@ class Gen3LiteArm:
                     # Wait for emergency operation to complete
                     while self.emergency_operation_in_progress:
                         rate.sleep()
-                        
-                # Check if object dropped during planning
-                if self.object_drop_detected.is_set():
-                    print(f"\033[1;31m[{timestamp}] Object drop detected during planning - aborting movement\033[0m")
-                    return False
-                    
                 rate.sleep()
                 
             planning_time = (datetime.datetime.now() - planning_start).total_seconds()
@@ -508,6 +456,8 @@ class Gen3LiteArm:
             while not future.done():
                 # Check if emergency operation is in progress during execution
                 if self.emergency_operation_in_progress:
+                    # Emergency will be handled in the callback, canceling current execution
+                    # No additional action needed here, let the emergency callback handle it
                     print(f"\033[1;31m[{timestamp}] Emergency operation in progress - waiting for completion\033[0m")
                     # Wait for emergency operation to complete
                     while self.emergency_operation_in_progress:
@@ -515,12 +465,6 @@ class Gen3LiteArm:
                     # After emergency operation completes, this movement may have been canceled
                     if future.done():
                         break
-                        
-                # Check if object dropped during execution
-                if self.object_drop_detected.is_set():
-                    print(f"\033[1;31m[{timestamp}] Object drop detected during execution - movement interrupted\033[0m")
-                    return False
-                    
                 rate.sleep()
                 
             execution_time = (datetime.datetime.now() - execution_start).total_seconds()
@@ -648,10 +592,6 @@ def execute_pick_and_place_task(arm, gripper, x, y, retries=0):
                     if arm.move_to_recovery_position():
                         return execute_pick_and_place_task(arm, gripper, x, y, retries + 1)
                 return False
-            
-            # Mark gripper as closed and start monitoring for drops
-            arm.gripper_closed = True
-            arm.start_drop_monitoring()
                 
         except Exception as e:
             print(f"\033[1;31m[{timestamp}] Grasping failed: {e}\033[0m")
@@ -664,40 +604,9 @@ def execute_pick_and_place_task(arm, gripper, x, y, retries=0):
                     return execute_pick_and_place_task(arm, gripper, x, y, retries + 1)
             return False
         
-        # Check if object was dropped before continuing
-        if arm.object_drop_detected.is_set():
-            print(f"\033[1;31m[{timestamp}] Object dropped after grasping - moving to recovery position\033[0m")
-            arm.gripper_closed = False
-            arm.stop_drop_monitoring()
-            
-            # Open gripper and move to recovery
-            gripper.move_to_position(GRIPPER_OPEN_TARGET)
-            
-            # Try recovery if we still have retries left
-            if retries < MAX_TASK_RETRIES:
-                if arm.move_to_recovery_position():
-                    return execute_pick_and_place_task(arm, gripper, x, y, retries + 1)
-            return False
-        
         # Move back to safe height
         if not arm.inverse_kinematic_movement(approach_pose, cartesian=True):
             print(f"\033[1;31m[{timestamp}] Failed to move back to safe height after pick\033[0m")
-            
-            # Check if object was dropped
-            if arm.object_drop_detected.is_set():
-                print(f"\033[1;31m[{timestamp}] Object dropped during movement\033[0m")
-                arm.gripper_closed = False
-                arm.stop_drop_monitoring()
-                
-                # Open gripper and move to recovery
-                gripper.move_to_position(GRIPPER_OPEN_TARGET)
-                
-                # Try recovery if we still have retries left
-                if retries < MAX_TASK_RETRIES:
-                    if arm.move_to_recovery_position():
-                        return execute_pick_and_place_task(arm, gripper, x, y, retries + 1)
-                return False
-            
             # Object might be dropped during this movement
             arm.set_status(RobotStatus.OBJECT_DROPPED)
             
@@ -711,22 +620,6 @@ def execute_pick_and_place_task(arm, gripper, x, y, retries=0):
         # Move to put position
         if not arm.inverse_kinematic_movement(put_pose, cartesian=True, status_during_move=RobotStatus.MOVING_TO_RELEASE):
             print(f"\033[1;31m[{timestamp}] Failed to move to put position\033[0m")
-            
-            # Check if object was dropped
-            if arm.object_drop_detected.is_set():
-                print(f"\033[1;31m[{timestamp}] Object dropped during movement\033[0m")
-                arm.gripper_closed = False
-                arm.stop_drop_monitoring()
-                
-                # Open gripper and move to recovery
-                gripper.move_to_position(GRIPPER_OPEN_TARGET)
-                
-                # Try recovery if we still have retries left
-                if retries < MAX_TASK_RETRIES:
-                    if arm.move_to_recovery_position():
-                        return execute_pick_and_place_task(arm, gripper, x, y, retries + 1)
-                return False
-            
             arm.set_status(RobotStatus.MOVE_TO_RELEASE_FAILED)
             
             # Try recovery if we still have retries left
@@ -735,10 +628,6 @@ def execute_pick_and_place_task(arm, gripper, x, y, retries=0):
                 if arm.move_to_recovery_position():
                     return execute_pick_and_place_task(arm, gripper, x, y, retries + 1)
             return False
-        
-        # Stop monitoring drops as we're about to release
-        arm.stop_drop_monitoring()
-        arm.gripper_closed = False
         
         # Open gripper to release object
         print(f"\033[1;36m[{timestamp}] Opening gripper to release object\033[0m")
@@ -789,10 +678,6 @@ def execute_pick_and_place_task(arm, gripper, x, y, retries=0):
     except Exception as e:
         # Unexpected error
         print(f"\033[1;31m[{timestamp}] Unexpected error during task execution: {e}\033[0m")
-        
-        # Ensure monitoring is stopped and gripper state is reset
-        arm.stop_drop_monitoring()
-        arm.gripper_closed = False
         
         # Try recovery if we still have retries left
         if retries < MAX_TASK_RETRIES:
@@ -898,20 +783,6 @@ def get_task_input():
         except ValueError:
             print("\033[1;31mInvalid input. Please enter a valid number.\033[0m")
     
-    # Get object drop threshold
-    global OBJECT_DROPPED_THRESHOLD
-    while True:
-        try:
-            drop_threshold_input = input(f"\033[1;36mEnter object drop threshold (default: {OBJECT_DROPPED_THRESHOLD}): \033[0m")
-            if drop_threshold_input.strip() == "":
-                # If user just presses enter, use default value
-                break
-            OBJECT_DROPPED_THRESHOLD = float(drop_threshold_input)
-            print(f"\033[1;32mObject drop threshold set to: {OBJECT_DROPPED_THRESHOLD}\033[0m")
-            break
-        except ValueError:
-            print("\033[1;31mInvalid input. Please enter a valid number.\033[0m")
-    
     # Get recovery position settings
     global RECOVERY_X, RECOVERY_Y, RECOVERY_Z
     print("\033[1;36mEnter recovery position coordinates (press Enter to use defaults):\033[0m")
@@ -992,7 +863,6 @@ def get_task_input():
     print("\033[1;36m------------------------------------\033[0m")
     print(f"\033[1;36mY Threshold for Help: {Y_THRESHOLD_FOR_HELP:.4f}\033[0m")
     print(f"\033[1;36mMax Retries per Task: {MAX_TASK_RETRIES}\033[0m")
-    print(f"\033[1;36mObject Drop Threshold: {OBJECT_DROPPED_THRESHOLD:.4f}\033[0m")
     print(f"\033[1;36mRecovery Position: X={RECOVERY_X:.4f}, Y={RECOVERY_Y:.4f}, Z={RECOVERY_Z:.4f}\033[0m")
     print("\033[1;36m------------------------------------\033[0m")
     print("\033[1;36m| Task |   X    |   Y    |   Z1   |   Z2   | Status |\033[0m")
@@ -1008,7 +878,6 @@ def get_task_input():
     print(f"\033[1;36mZ1 = {PICK_Z_HEIGHT} (Pick height)\033[0m")
     print(f"\033[1;36mZ2 = {PUT_Z_HEIGHT} (Put height)\033[0m")
     print(f"\033[1;36mY Threshold = {Y_THRESHOLD_FOR_HELP} (Require help if Y > threshold)\033[0m")
-    print(f"\033[1;36mObject Drop = {OBJECT_DROPPED_THRESHOLD} (Gripper > threshold = dropped)\033[0m")
     
     return task_coordinates
 
@@ -1033,7 +902,6 @@ def main(args=None):
         log_file.write(f"Execution start time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         log_file.write(f"Y threshold for help: {Y_THRESHOLD_FOR_HELP}\n")
         log_file.write(f"Max retries per task: {MAX_TASK_RETRIES}\n")
-        log_file.write(f"Object drop threshold: {OBJECT_DROPPED_THRESHOLD}\n")
         log_file.write(f"Recovery position: X={RECOVERY_X}, Y={RECOVERY_Y}, Z={RECOVERY_Z}\n")
         log_file.write(f"{'='*50}\n")
     
@@ -1165,8 +1033,7 @@ if __name__ == '__main__':
     print(f"\033[1;32m  Status Publishing at 10Hz enabled\033[0m")
     print(f"\033[1;32m  Require Help Feature enabled\033[0m")
     print(f"\033[1;32m  Task-Level Retry System enabled\033[0m")
-    print(f"\033[1;32m  Gripper Success Detection enabled\033[0m")
-    print(f"\033[1;32m  Real-time Object Drop Detection enabled\033[0m") 
+    print(f"\033[1;32m  Gripper Success Detection enabled\033[0m") 
     print(f"\033[1;32m  Execution time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\033[0m")
     print(f"\033[1;32m{'='*50}\033[0m")
     

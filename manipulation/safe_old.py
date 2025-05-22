@@ -93,6 +93,7 @@ class F2GripperMonitor(Node):
             if idx < len(msg.position):
                 self.gripper_position = msg.position[idx]
                 self.gripper_position_buffer.append(self.gripper_position)
+                # 这里不需要打印，已经统一在print_values中打印
 
     def publish_gripper_data(self):
         """Publish current gripper position at 10Hz"""
@@ -111,7 +112,7 @@ class F2GripperMonitor(Node):
             # Check if current value differs from any value in the window by more than 10
             for i, past_f2 in enumerate(self.f2_buffer):
                 difference = abs(current_f2 - past_f2)
-                if difference > 15:
+                if difference > 10:
                     self.trigger_emergency(current_f2, past_f2, difference)
                     return  # Only trigger once
 
@@ -162,13 +163,7 @@ class F2GripperMonitor(Node):
         print("\n====== JOINT MONITORING - LAST VALUES ======")
         print(f"Time: {time.strftime('%H:%M:%S')}")
         print(f"F2 Buffer size: {len(self.f2_buffer)}")
-        
-        # 修复错误：使用正确的属性名 self.gripper_position 而不是 self._position
-        if self.gripper_position is not None:
-            print(f"Gripper Position: {self.gripper_position:.6f}")
-        else:
-            print("Gripper Position: Not available")
-            
+        print(f"Gripper Position: {self.gripper_position:.6f if self.gripper_position is not None else 'Not available'}")
         print(f"Emergency Status: {'ACTIVE' if self.emergency_triggered else 'INACTIVE'}")
         
         if self.emergency_triggered and self.emergency_time is not None:
