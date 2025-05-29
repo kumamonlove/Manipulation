@@ -1,0 +1,9 @@
+[console_scripts]
+Manipulation = manipulation.Manipulation:main
+gen3lite_pymoveit2 = manipulation.gen3lite_pymoveit2:main
+help = manipulation.help:main
+monitor = manipulation.monitor:main
+record = manipulation.record:main
+safe = manipulation.safe:main
+simulated_gripper = manipulation.simulated_gripper_publisher:main
+

@@ -1,0 +1,74 @@
+running egg_info
+creating build/manipulation/manipulation.egg-info
+writing build/manipulation/manipulation.egg-info/PKG-INFO
+writing dependency_links to build/manipulation/manipulation.egg-info/dependency_links.txt
+writing entry points to build/manipulation/manipulation.egg-info/entry_points.txt
+writing requirements to build/manipulation/manipulation.egg-info/requires.txt
+writing top-level names to build/manipulation/manipulation.egg-info/top_level.txt
+writing manifest file 'build/manipulation/manipulation.egg-info/SOURCES.txt'
+reading manifest file 'build/manipulation/manipulation.egg-info/SOURCES.txt'
+writing manifest file 'build/manipulation/manipulation.egg-info/SOURCES.txt'
+running build
+running build_py
+creating /home/andy/ros2_ws/src/manipulation/build/manipulation/build
+creating /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib
+creating /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation
+copying manipulation/Manipulation_old1.py -> /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation
+copying manipulation/safe_old.py -> /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation
+copying manipulation/safe.py -> /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation
+copying manipulation/record.py -> /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation
+copying manipulation/Manipulation_FFF.py -> /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation
+copying manipulation/gen3lite_pymoveit2.py -> /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation
+copying manipulation/help.py -> /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation
+copying manipulation/monitor.py -> /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation
+copying manipulation/__init__.py -> /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation
+copying manipulation/Manipulation_old.py -> /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation
+copying manipulation/Manipulation.py -> /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation
+copying manipulation/Manipulation（复件）.py -> /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation
+copying manipulation/simulated_gripper_publisher.py -> /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation
+running install
+running install_lib
+creating /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation
+copying /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation/Manipulation_old1.py -> /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation
+copying /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation/safe_old.py -> /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation
+copying /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation/safe.py -> /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation
+copying /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation/record.py -> /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation
+copying /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation/Manipulation_FFF.py -> /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation
+copying /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation/gen3lite_pymoveit2.py -> /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation
+copying /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation/help.py -> /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation
+copying /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation/monitor.py -> /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation
+copying /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation/__init__.py -> /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation
+copying /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation/Manipulation_old.py -> /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation
+copying /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation/Manipulation.py -> /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation
+copying /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation/Manipulation（复件）.py -> /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation
+copying /home/andy/ros2_ws/src/manipulation/build/manipulation/build/lib/manipulation/simulated_gripper_publisher.py -> /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation
+byte-compiling /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation/Manipulation_old1.py to Manipulation_old1.cpython-310.pyc
+byte-compiling /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation/safe_old.py to safe_old.cpython-310.pyc
+byte-compiling /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation/safe.py to safe.cpython-310.pyc
+byte-compiling /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation/record.py to record.cpython-310.pyc
+byte-compiling /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation/Manipulation_FFF.py to Manipulation_FFF.cpython-310.pyc
+byte-compiling /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation/gen3lite_pymoveit2.py to gen3lite_pymoveit2.cpython-310.pyc
+byte-compiling /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation/help.py to help.cpython-310.pyc
+byte-compiling /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation/monitor.py to monitor.cpython-310.pyc
+byte-compiling /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation/__init__.py to __init__.cpython-310.pyc
+byte-compiling /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation/Manipulation_old.py to Manipulation_old.cpython-310.pyc
+byte-compiling /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation/Manipulation.py to Manipulation.cpython-310.pyc
+byte-compiling /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation/Manipulation（复件）.py to Manipulation（复件）.cpython-310.pyc
+byte-compiling /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation/simulated_gripper_publisher.py to simulated_gripper_publisher.cpython-310.pyc
+running install_data
+creating /home/andy/ros2_ws/src/manipulation/install/manipulation/share/ament_index
+creating /home/andy/ros2_ws/src/manipulation/install/manipulation/share/ament_index/resource_index
+creating /home/andy/ros2_ws/src/manipulation/install/manipulation/share/ament_index/resource_index/packages
+copying resource/manipulation -> /home/andy/ros2_ws/src/manipulation/install/manipulation/share/ament_index/resource_index/packages
+copying package.xml -> /home/andy/ros2_ws/src/manipulation/install/manipulation/share/manipulation
+running install_egg_info
+Copying build/manipulation/manipulation.egg-info to /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/python3.10/site-packages/manipulation-0.0.0-py3.10.egg-info
+running install_scripts
+Installing Manipulation script to /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/manipulation
+Installing gen3lite_pymoveit2 script to /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/manipulation
+Installing help script to /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/manipulation
+Installing monitor script to /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/manipulation
+Installing record script to /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/manipulation
+Installing safe script to /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/manipulation
+Installing simulated_gripper script to /home/andy/ros2_ws/src/manipulation/install/manipulation/lib/manipulation
+writing list of installed files to '/home/andy/ros2_ws/src/manipulation/build/manipulation/install.log'

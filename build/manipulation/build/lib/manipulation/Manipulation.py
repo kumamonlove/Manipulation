@@ -25,14 +25,14 @@ print(f"\033[1;36mScript execution path: {script_dir}\033[0m")
 # =================== CONSTANTS ===================
 # Z positions
 PICK_Z_HEIGHT = 0.13  # Z height for pick operations
-PUT_Z_X = 0.209
-PUT_Z_Y = 0.369
-PUT_Z_HEIGHT = -0.15   # Z height for put operations
+PUT_Z_X = 0.141
+PUT_Z_Y = 0.45
+PUT_Z_HEIGHT = 0.129   # Z height for put operations
 SAFE_Z_HEIGHT = 0.3    # Safe Z height for movement between operations
 
 # Initial/Home position
-HOME_X = 0.2
-HOME_Y = 0.2 
+HOME_X = 0.1
+HOME_Y = 0.1  
 HOME_Z = 0.3
 
 # Gripper parameters
@@ -73,12 +73,6 @@ class Gen3LiteArm:
         self.restart_ready = False
         self.emergency_operation_in_progress = False
         
-        # -------- Task management --------
-        self.current_task_id = None
-        self.last_processed_task_id = None
-        self.pending_task = None
-        self.task_lock = Lock()
-        
         # -------- Object drop monitoring --------
         self.object_drop_detected = Event()
         self.object_drop_monitoring_active = False
@@ -88,15 +82,6 @@ class Gen3LiteArm:
         self.current_status = RobotStatus.WAITING_FOR_TASK
         self.status_lock = Lock()
         self.status_publisher = self.node.create_publisher(String, "/robot_status", 10)
-
-        # -------- Task goal subscription --------
-        self.task_goal_subscription = self.node.create_subscription(
-            String,
-            "/task_goal",
-            self.task_goal_callback,
-            10,
-            callback_group=self.callback_group,
-        )
 
         # -------- Gripper position sub & stats --------
         self.gripper_position = None
@@ -157,67 +142,8 @@ class Gen3LiteArm:
         # 10 Hz status pub
         self.status_timer = self.node.create_timer(0.1, self.publish_status)
 
-        print("\033[1;32mGen3LiteArm ready. Emergency handler active. Waiting for task goals on /task_goal topic.\033[0m")
+        print("\033[1;32mGen3LiteArm ready. Emergency handler active.\033[0m")
         self.start_time = datetime.datetime.now()
-
-    # ------------------- Task goal callback -------------------
-    def task_goal_callback(self, msg: String):
-        """Handle incoming task goal messages"""
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        # Only process new tasks when in WAITING_FOR_TASK status
-        if self.current_status != RobotStatus.WAITING_FOR_TASK:
-            print(f"\033[1;33m[{timestamp}] Received task goal but robot is busy (status: {self.current_status}), ignoring\033[0m")
-            return
-        
-        try:
-            # Parse JSON message
-            task_data = json.loads(msg.data)
-            task_id = task_data.get("task_id")
-            x = task_data.get("x")
-            y = task_data.get("y")
-            
-            if task_id is None or x is None or y is None:
-                print(f"\033[1;31m[{timestamp}] Invalid task goal format: {msg.data}\033[0m")
-                return
-            
-            # Convert to float
-            x = float(x)
-            y = float(y)
-            
-            with self.task_lock:
-                # Check if this is a new task ID
-                if self.last_processed_task_id == task_id:
-                    print(f"\033[1;33m[{timestamp}] Task ID {task_id} already processed, ignoring\033[0m")
-                    return
-                
-                # Store the new task
-                self.pending_task = {
-                    "task_id": task_id,
-                    "x": x,
-                    "y": y
-                }
-            
-            print(f"\033[1;32m[{timestamp}] New task goal received: ID={task_id}, X={x:.4f}, Y={y:.4f}\033[0m")
-            
-        except json.JSONDecodeError as e:
-            print(f"\033[1;31m[{timestamp}] Failed to parse task goal JSON: {e}\033[0m")
-        except (ValueError, KeyError) as e:
-            print(f"\033[1;31m[{timestamp}] Invalid task goal data: {e}\033[0m")
-
-    def get_pending_task(self):
-        """Get and clear pending task if available"""
-        with self.task_lock:
-            if self.pending_task is not None:
-                task = self.pending_task.copy()
-                self.pending_task = None
-                return task
-            return None
-
-    def mark_task_processed(self, task_id):
-        """Mark a task as processed"""
-        with self.task_lock:
-            self.last_processed_task_id = task_id
 
     # ------------------- Gripper helpers -------------------
     def gripper_callback(self, msg: Float32):
@@ -626,16 +552,6 @@ def execute_single_pick_and_place_task(arm, gripper, x, y):
     pick_pose.orientation.z = float(vertical_orientation[2])
     pick_pose.orientation.w = float(vertical_orientation[3])
     
-    # Create put approach pose (above put position at z=0.3)
-    put_approach_pose = Pose()
-    put_approach_pose.position.x = float(PUT_Z_X)
-    put_approach_pose.position.y = float(PUT_Z_Y)
-    put_approach_pose.position.z = float(0.3)  # Safe height above put position
-    put_approach_pose.orientation.x = float(vertical_orientation[0])
-    put_approach_pose.orientation.y = float(vertical_orientation[1])
-    put_approach_pose.orientation.z = float(vertical_orientation[2])
-    put_approach_pose.orientation.w = float(vertical_orientation[3])
-    
     put_pose = Pose()
     put_pose.position.x = float(PUT_Z_X)
     put_pose.position.y = float(PUT_Z_Y)
@@ -694,7 +610,7 @@ def execute_single_pick_and_place_task(arm, gripper, x, y):
             gripper.move_to_position(GRIPPER_OPEN_TARGET)
             return False
         
-        # Move back to safe height above pick position
+        # Move back to safe height
         if not arm.inverse_kinematic_movement(approach_pose, cartesian=True):
             print(f"\033[1;31m[{timestamp}] Failed to move back to safe height after pick\033[0m")
             
@@ -710,25 +626,7 @@ def execute_single_pick_and_place_task(arm, gripper, x, y):
             arm.set_status(RobotStatus.OBJECT_DROPPED)
             return False
         
-        # Move to put approach position (above put position at z=0.3)
-        print(f"\033[1;36m[{timestamp}] Moving to put approach position: X={PUT_Z_X:.4f}, Y={PUT_Z_Y:.4f}, Z=0.3\033[0m")
-        if not arm.inverse_kinematic_movement(put_approach_pose, cartesian=True, status_during_move=RobotStatus.MOVING_TO_RELEASE):
-            print(f"\033[1;31m[{timestamp}] Failed to move to put approach position\033[0m")
-            
-            # Check if object was dropped
-            if arm.object_drop_detected.is_set():
-                print(f"\033[1;31m[{timestamp}] Object dropped during movement\033[0m")
-                arm.gripper_closed = False
-                arm.stop_drop_monitoring()
-                # Open gripper
-                gripper.move_to_position(GRIPPER_OPEN_TARGET)
-                return False
-            
-            arm.set_status(RobotStatus.MOVE_TO_RELEASE_FAILED)
-            return False
-        
-        # Move down to put position
-        print(f"\033[1;36m[{timestamp}] Moving down to put position: Z={PUT_Z_HEIGHT:.4f}\033[0m")
+        # Move to put position
         if not arm.inverse_kinematic_movement(put_pose, cartesian=True, status_during_move=RobotStatus.MOVING_TO_RELEASE):
             print(f"\033[1;31m[{timestamp}] Failed to move to put position\033[0m")
             
@@ -767,10 +665,9 @@ def execute_single_pick_and_place_task(arm, gripper, x, y):
             arm.set_status(RobotStatus.RELEASING_FAILED)
             return False
         
-        # Move back to put approach position (z=0.3 above put position)
-        print(f"\033[1;36m[{timestamp}] Moving back to put approach position: Z=0.3\033[0m")
-        if not arm.inverse_kinematic_movement(put_approach_pose, cartesian=True):
-            print(f"\033[1;31m[{timestamp}] Failed to move back to put approach position after release\033[0m")
+        # Move back to safe height
+        if not arm.inverse_kinematic_movement(approach_pose, cartesian=True):
+            print(f"\033[1;31m[{timestamp}] Failed to move back to safe height after put\033[0m")
             return False
         
         # Task completed successfully
@@ -794,8 +691,51 @@ def execute_single_pick_and_place_task(arm, gripper, x, y):
         return False
 
 
+def get_single_task_input():
+    """Get single task input from user"""
+    print("\033[1;36m" + "="*50 + "\033[0m")
+    print("\033[1;36mEnter coordinates for next pick and place task\033[0m")
+    print("\033[1;36mEnter 'q' to quit the program\033[0m")
+    print("\033[1;36m" + "="*50 + "\033[0m")
+    
+    while True:
+        try:
+            x_input = input("\033[1;36mEnter X coordinate (or 'q' to quit): \033[0m")
+            if x_input.lower() == 'q':
+                return None, None, True  # Signal to quit
+            
+            x = float(x_input)
+            
+            y_input = input("\033[1;36mEnter Y coordinate: \033[0m")
+            y = float(y_input)
+            
+            # Check and warn if Y coordinate exceeds threshold
+            if y > Y_THRESHOLD_FOR_HELP:
+                print(f"\033[1;33mWarning: Y coordinate {y:.4f} exceeds threshold {Y_THRESHOLD_FOR_HELP:.4f}")
+                print(f"This task will trigger a require_help message.\033[0m")
+                confirm = input(f"\033[1;36mContinue with this coordinate? (y/n): \033[0m")
+                if confirm.lower() != 'y':
+                    continue
+            
+            # Display task summary
+            print("\033[1;36m" + "-"*30 + "\033[0m")
+            print(f"\033[1;36mTask Summary:\033[0m")
+            print(f"\033[1;36mX: {x:.4f}, Y: {y:.4f}\033[0m")
+            print(f"\033[1;36mPick Z: {PICK_Z_HEIGHT:.4f}, Put Z: {PUT_Z_HEIGHT:.4f}\033[0m")
+            if y > Y_THRESHOLD_FOR_HELP:
+                print(f"\033[1;33mStatus: ⚠️ Requires Help\033[0m")
+            else:
+                print(f"\033[1;32mStatus: ✓ Normal\033[0m")
+            print("\033[1;36m" + "-"*30 + "\033[0m")
+            
+            return x, y, False
+            
+        except ValueError:
+            print("\033[1;31mInvalid input. Please enter valid numbers for coordinates.\033[0m")
+
+
 def main(args=None):
-    """Main function with topic-based task execution"""
+    """Main function with continuous loop execution"""
     # Set up signal handler for Ctrl+C
     def signal_handler(sig, frame):
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -811,11 +751,10 @@ def main(args=None):
     
     with open(log_file_path, "a") as log_file:
         log_file.write(f"\n\n{'='*50}\n")
-        log_file.write(f"Topic-based Task Execution start time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        log_file.write(f"Single Task Loop Execution start time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         log_file.write(f"Y threshold for help: {Y_THRESHOLD_FOR_HELP}\n")
         log_file.write(f"Object drop threshold: {OBJECT_DROPPED_THRESHOLD}\n")
         log_file.write(f"Home position: X={HOME_X}, Y={HOME_Y}, Z={HOME_Z}\n")
-        log_file.write(f"Task goal topic: /task_goal\n")
         log_file.write(f"{'='*50}\n")
     
     # Initialize ROS2 and robot components
@@ -838,36 +777,21 @@ def main(args=None):
         
         task_count = 0
         
-        print(f"\033[1;32m[{timestamp}] System ready! Waiting for task goals on /task_goal topic...\033[0m")
-        print(f"\033[1;36mPublish task goals using:\033[0m")
-        print(f"\033[1;36mros2 topic pub /task_goal std_msgs/msg/String \"data: '{{\\\"task_id\\\": 42, \\\"x\\\": 1.25, \\\"y\\\": -3.50}}'\" -r 1\033[0m")
-        
         # Main continuous loop
         while True:
             try:
-                # Only process tasks when in WAITING_FOR_TASK status
-                if arm.current_status != RobotStatus.WAITING_FOR_TASK:
-                    time.sleep(0.1)  # Small delay to prevent busy waiting
-                    continue
+                # Get next task input
+                x, y, should_quit = get_single_task_input()
                 
-                # Check for pending task
-                task = arm.get_pending_task()
-                
-                if task is None:
-                    time.sleep(0.1)  # Small delay to prevent busy waiting
-                    continue
+                if should_quit:
+                    print(f"\033[1;33m[{timestamp}] User requested quit, exiting...\033[0m")
+                    break
                 
                 task_count += 1
                 timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
-                task_id = task["task_id"]
-                x = task["x"]
-                y = task["y"]
-                
-                print(f"\033[1;36m[{timestamp}] Processing task {task_count}: ID={task_id}, X={x:.4f}, Y={y:.4f}\033[0m")
-                
                 with open(log_file_path, "a") as log_file:
-                    log_file.write(f"Task {task_count} started at {timestamp}: ID={task_id}, X={x:.4f}, Y={y:.4f}\n")
+                    log_file.write(f"Task {task_count} started at {timestamp}: X={x:.4f}, Y={y:.4f}\n")
                 
                 # Check if Y coordinate exceeds threshold
                 if y > Y_THRESHOLD_FOR_HELP:
@@ -880,37 +804,30 @@ def main(args=None):
                     # Set status to require_help
                     arm.set_status(RobotStatus.REQUIRE_HELP)
                     
-                    # Mark task as processed even though we skipped it
-                    arm.mark_task_processed(task_id)
-                    
-                    print(f"\033[1;33m[{timestamp}] Task requires help - marked as processed and skipped\033[0m")
+                    # Skip this task
+                    print(f"\033[1;33m[{timestamp}] Task requires help - skipping to next task\033[0m")
                     
                     with open(log_file_path, "a") as log_file:
                         log_file.write(f"Task {task_count} skipped (requires help) at {timestamp}\n")
                     
-                    # Return to waiting status
-                    arm.set_status(RobotStatus.WAITING_FOR_TASK)
                     continue
                 
                 # Execute the task
-                print(f"\033[1;36m[{timestamp}] Starting task execution {task_count}: ID={task_id}, X={x:.4f}, Y={y:.4f}\033[0m")
+                print(f"\033[1;36m[{timestamp}] Starting task {task_count}: X={x:.4f}, Y={y:.4f}\033[0m")
                 
                 success = execute_single_pick_and_place_task(arm, gripper, x, y)
                 
-                # Mark task as processed regardless of success/failure
-                arm.mark_task_processed(task_id)
-                
                 if success:
-                    print(f"\033[1;32m[{timestamp}] Task {task_count} (ID={task_id}) completed successfully!\033[0m")
+                    print(f"\033[1;32m[{timestamp}] Task {task_count} completed successfully!\033[0m")
                     arm.set_status(RobotStatus.TASK_COMPLETED)
                     
                     with open(log_file_path, "a") as log_file:
-                        log_file.write(f"Task {task_count} (ID={task_id}) completed successfully at {timestamp}\n")
+                        log_file.write(f"Task {task_count} completed successfully at {timestamp}\n")
                 else:
-                    print(f"\033[1;31m[{timestamp}] Task {task_count} (ID={task_id}) failed\033[0m")
+                    print(f"\033[1;31m[{timestamp}] Task {task_count} failed\033[0m")
                     
                     with open(log_file_path, "a") as log_file:
-                        log_file.write(f"Task {task_count} (ID={task_id}) failed at {timestamp}\n")
+                        log_file.write(f"Task {task_count} failed at {timestamp}\n")
                 
                 # Always return to home position after each task
                 print(f"\033[1;36m[{timestamp}] Returning to home position...\033[0m")
@@ -924,8 +841,7 @@ def main(args=None):
                 # Set status back to waiting for next task
                 arm.set_status(RobotStatus.WAITING_FOR_TASK)
                 
-                print(f"\033[1;36m[{timestamp}] Task {task_count} (ID={task_id}) cycle completed. Ready for next task.\033[0m")
-                print(f"\033[1;32mWaiting for next task goal on /task_goal topic...\033[0m")
+                print(f"\033[1;36m[{timestamp}] Task {task_count} cycle completed. Ready for next task.\033[0m")
                 print("\033[1;36m" + "="*60 + "\033[0m")
                 
             except KeyboardInterrupt:
@@ -989,13 +905,13 @@ def main(args=None):
 
 if __name__ == '__main__':
     print(f"\033[1;32m{'='*60}\033[0m")
-    print(f"\033[1;32m  Gen3Lite Robotic Arm - Topic-based Task Control\033[0m")
+    print(f"\033[1;32m  Gen3Lite Robotic Arm - Single Task Loop Control\033[0m")
     print(f"\033[1;32m  Features:\033[0m")
-    print(f"\033[1;32m  - ROS2 topic-based task reception (/task_goal)\033[0m")
-    print(f"\033[1;32m  - Task ID duplicate detection and filtering\033[0m")
+    print(f"\033[1;32m  - Single task execution with continuous loop\033[0m")
     print(f"\033[1;32m  - Automatic return to home position after each task\033[0m")
+    print(f"\033[1;32m  - No retry on grasping failure - direct home return\033[0m")
     print(f"\033[1;32m  - Emergency stop and object drop detection\033[0m")
-    print(f"\033[1;32m  - Only processes tasks when in WAITING_FOR_TASK status\033[0m")
+    print(f"\033[1;32m  - Enter 'q' to quit program\033[0m")
     print(f"\033[1;32m  Execution time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\033[0m")
     print(f"\033[1;32m{'='*60}\033[0m")
     
